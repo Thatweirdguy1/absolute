@@ -268,14 +268,14 @@ pub async fn resolve_missing_metadata(
     let token = crate::services::credentials::get_tmdb_token().map_err(|e| e.to_string())?;
     let token = match token {
         Some(t) => t,
-        None => return Err(\"No TMDB token found\".into()),
+        None => return Err("No TMDB token found".into()),
     };
 
     let tmdb = crate::services::tmdb::TmdbClient::new(token);
 
     // Get up to 50 missing items
     let missing_media = sqlx::query!(
-        \"SELECT internal_id, title, release_year FROM media WHERE tmdb_id IS NULL LIMIT 50\"
+        "SELECT internal_id, title, release_year FROM media WHERE tmdb_id IS NULL LIMIT 50"
     )
     .fetch_all(&*pool)
     .await
@@ -289,7 +289,7 @@ pub async fn resolve_missing_metadata(
             if let Some(first) = res.results.first() {
                 // Update DB
                 let _ = sqlx::query!(
-                    \"UPDATE media SET tmdb_id = ?, poster_path = ?, backdrop_path = ?, overview = ?, metadata_completeness = 1 WHERE internal_id = ?\",
+                    "UPDATE media SET tmdb_id = ?, poster_path = ?, backdrop_path = ?, overview = ?, metadata_completeness = 1 WHERE internal_id = ?",
                     first.id,
                     first.poster_path,
                     first.backdrop_path,
@@ -302,7 +302,7 @@ pub async fn resolve_missing_metadata(
             } else {
                 // Mark as not found to avoid re-querying every time
                 let _ = sqlx::query!(
-                    \"UPDATE media SET metadata_completeness = -1 WHERE internal_id = ?\",
+                    "UPDATE media SET metadata_completeness = -1 WHERE internal_id = ?",
                     media.internal_id
                 ).execute(&*pool).await;
             }
