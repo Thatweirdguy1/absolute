@@ -30,6 +30,41 @@ export default function SettingsPage() {
       </section>
 
       <section className="space-y-4">
+        <h2 className="text-xl font-semibold text-white border-b border-slate-800 pb-2">External Integrations</h2>
+        <div className="bg-slate-900 border border-slate-800 p-6 rounded-xl">
+          <div>
+            <label className="block text-sm font-medium text-slate-400 mb-1">TMDB API Read Access Token (v4)</label>
+            <p className="text-xs text-slate-500 mb-3">Absolute uses your own API token to match titles. This is securely stored in your OS credential vault.</p>
+            <div className="flex gap-2">
+              <input 
+                type="password" 
+                id="tmdbTokenInput"
+                placeholder="eyJh..." 
+                className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-purple-500 font-mono text-sm" 
+              />
+              <button 
+                onClick={async () => {
+                  const el = document.getElementById('tmdbTokenInput') as HTMLInputElement;
+                  if (!el.value) return;
+                  const { saveTmdbToken } = await import('@/lib/tauri-api');
+                  try {
+                    const success = await saveTmdbToken(el.value);
+                    if (success) alert('Token validated and saved securely!');
+                    else alert('Token is invalid or expired.');
+                  } catch (e) {
+                    alert('Error saving token: ' + String(e));
+                  }
+                }}
+                className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-500 transition-colors text-sm font-medium"
+              >
+                Save & Verify
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="space-y-4">
         <h2 className="text-xl font-semibold text-white border-b border-slate-800 pb-2">Data & Import History</h2>
         <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
           <table className="w-full text-left text-sm">

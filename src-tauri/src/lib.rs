@@ -28,7 +28,9 @@ pub fn run() {
             commands::get_profile,
             commands::create_profile,
             commands::import_letterboxd_csv,
-            commands::get_dashboard_stats
+            commands::get_dashboard_stats,
+            commands::check_tmdb_token,
+            commands::save_tmdb_token_command
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

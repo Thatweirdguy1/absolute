@@ -93,3 +93,28 @@ pub async fn get_dashboard_stats(pool: tauri::State<'_, SqlitePool>) -> Result<D
         avg_rating: if avg_rating > 0.0 { avg_rating / 2.0 } else { 0.0 }, // Convert out of 10 to out of 5
     })
 }
+
+#[tauri::command]
+pub async fn check_tmdb_token() -> Result<bool, String> {
+    let token = crate::services::credentials::get_tmdb_token()
+        .map_err(|e| e.to_string())?;
+    Ok(token.is_some())
+}
+
+#[tauri::command]
+pub async fn save_tmdb_token_command(token: String) -> Result<bool, String> {
+    // Basic test query
+    let client = reqwest::Client::new();
+    let res = client.get("https://api.themoviedb.org/3/authentication")
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+        
+    if !res.status().is_success() {
+        return Err("Invalid or expired token.".to_string());
+    }
+
+    crate::services::credentials::save_tmdb_token(&token).map_err(|e| e.to_string())?;
+    Ok(true)
+}

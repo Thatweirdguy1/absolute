@@ -37,3 +37,17 @@ export async function getDashboardStats(): Promise<DashboardStats> {
   }
 }
 
+export async function checkTmdbToken(): Promise<boolean> {
+  try {
+    return await invoke<boolean>('check_tmdb_token');
+  } catch (error) {
+    console.error('Failed to check token:', error);
+    return false;
+  }
+}
+
+export async function saveTmdbToken(token: string): Promise<boolean> {
+  return await invoke<boolean>('save_tmdb_token_command', { token });
+}
+
+
