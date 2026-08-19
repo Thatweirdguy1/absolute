@@ -73,8 +73,13 @@ export interface HistoryEvent {
   release_year: number | null;
   watched_date: string | null;
   rating_value: number | null;
+  poster_path: string | null;
 }
 
 export async function getHistory(): Promise<HistoryEvent[]> {
   return await invoke<HistoryEvent[]>('get_history');
+}
+
+export async function resolveMissingMetadata(): Promise<number> {
+  return await invoke<number>('resolve_missing_metadata');
 }

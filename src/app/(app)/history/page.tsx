@@ -55,9 +55,13 @@ export default function HistoryPage() {
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
           {filteredHistory.map(item => (
             <div key={item.id} className="aspect-[2/3] bg-slate-800 rounded-lg overflow-hidden relative group cursor-pointer hover:ring-2 hover:ring-purple-500 transition-all flex flex-col items-center justify-center text-center p-2">
-              <span className="text-slate-500 text-sm italic">No Poster Yet</span>
+              {item.poster_path ? (
+                <img src={`https://image.tmdb.org/t/p/w342${item.poster_path}`} alt={item.title} className="absolute inset-0 w-full h-full object-cover" />
+              ) : (
+                <span className="text-slate-500 text-sm italic">No Poster Yet</span>
+              )}
               <div className="absolute bottom-0 inset-x-0 p-2 bg-gradient-to-t from-black/80 to-transparent">
-                <p className="text-sm font-semibold truncate text-white">{item.title}</p>
+                <p className="text-sm font-semibold truncate text-white drop-shadow-md">{item.title}</p>
                 {item.rating_value && <p className="text-xs text-purple-400 flex items-center gap-1"><Star size={10} /> {item.rating_value / 2}</p>}
               </div>
             </div>

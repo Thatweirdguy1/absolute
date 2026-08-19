@@ -41,7 +41,7 @@ impl TmdbClient {
     }
 
     pub async fn search_multi(&self, query: &str, year: Option<i32>) -> AppResult<TmdbMultiSearchResult> {
-        let mut url = format!("{}/search/multi?api_key={}&query={}", TMDB_BASE_URL, self.api_key, query);
+        let mut url = format!("{}/search/multi?query={}", TMDB_BASE_URL, query);
         
         if let Some(y) = year {
             // Note: TMDB multi search doesn't strictly support primary_release_year, 
@@ -49,7 +49,9 @@ impl TmdbClient {
             url.push_str(&format!("&year={}", y));
         }
 
-        let resp = self.client.get(&url).send().await?.error_for_status()?;
+        let resp = self.client.get(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .send().await?.error_for_status()?;
         let result = resp.json::<TmdbMultiSearchResult>().await?;
         
         Ok(result)

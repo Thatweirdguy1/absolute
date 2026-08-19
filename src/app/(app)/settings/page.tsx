@@ -76,6 +76,27 @@ export default function SettingsPage() {
               </button>
             </div>
           </div>
+          
+          <div className="mt-6 pt-6 border-t border-slate-800 flex justify-between items-center">
+            <div>
+              <p className="text-sm text-white font-medium">Sync Missing Posters</p>
+              <p className="text-xs text-slate-400">Fetch TMDB metadata for up to 50 missing films at a time.</p>
+            </div>
+            <button 
+              onClick={async () => {
+                try {
+                  const { resolveMissingMetadata } = await import('@/lib/tauri-api');
+                  const count = await resolveMissingMetadata();
+                  alert(`Successfully resolved ${count} titles from TMDB!`);
+                } catch (e) {
+                  alert("Failed to sync: " + e);
+                }
+              }}
+              className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-sm font-medium rounded-lg transition-colors"
+            >
+              Sync Now
+            </button>
+          </div>
         </div>
       </section>
 

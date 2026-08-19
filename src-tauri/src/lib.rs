@@ -32,6 +32,7 @@ pub fn run() {
             commands::import_letterboxd_csv,
             commands::get_dashboard_stats,
             commands::get_history,
+            commands::resolve_missing_metadata,
             commands::check_tmdb_token,
             commands::save_tmdb_token_command
         ])
