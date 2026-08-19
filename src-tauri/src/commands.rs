@@ -249,12 +249,12 @@ pub async fn get_history(
     pool: tauri::State<'_, SqlitePool>
 ) -> Result<Vec<HistoryEvent>, String> {
     let rows = sqlx::query(
-        \"SELECT we.id, m.title, m.media_type, m.release_year, we.watched_date, r.rating_value
+        "SELECT we.id, m.title, m.media_type, m.release_year, we.watched_date, r.rating_value
         FROM watch_events we
         JOIN media m ON we.media_id = m.internal_id
         LEFT JOIN user_ratings r ON r.media_id = m.internal_id
         ORDER BY we.watched_date DESC NULLS LAST
-        LIMIT 100\"
+        LIMIT 100"
     )
     .fetch_all(&*pool)
     .await
@@ -264,12 +264,12 @@ pub async fn get_history(
     for row in rows {
         use sqlx::Row;
         history.push(HistoryEvent {
-            id: row.try_get(\"id\").unwrap_or_default(),
-            title: row.try_get(\"title\").unwrap_or_default(),
-            media_type: row.try_get(\"media_type\").unwrap_or_default(),
-            release_year: row.try_get(\"release_year\").unwrap_or(None),
-            watched_date: row.try_get(\"watched_date\").unwrap_or(None),
-            rating_value: row.try_get(\"rating_value\").unwrap_or(None),
+            id: row.try_get("id").unwrap_or_default(),
+            title: row.try_get("title").unwrap_or_default(),
+            media_type: row.try_get("media_type").unwrap_or_default(),
+            release_year: row.try_get("release_year").unwrap_or(None),
+            watched_date: row.try_get("watched_date").unwrap_or(None),
+            rating_value: row.try_get("rating_value").unwrap_or(None),
         });
     }
     Ok(history)
