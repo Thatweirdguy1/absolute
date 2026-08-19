@@ -24,6 +24,32 @@ pub struct DiaryRow {
     pub watched_date: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct WatchedRow {
+    #[serde(rename = "Date")]
+    pub date: Option<String>,
+    #[serde(rename = "Name")]
+    pub name: String,
+    #[serde(rename = "Year")]
+    pub year: Option<i32>,
+    #[serde(rename = "Letterboxd URI")]
+    pub letterboxd_uri: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RatingRow {
+    #[serde(rename = "Date")]
+    pub date: Option<String>,
+    #[serde(rename = "Name")]
+    pub name: String,
+    #[serde(rename = "Year")]
+    pub year: Option<i32>,
+    #[serde(rename = "Letterboxd URI")]
+    pub letterboxd_uri: Option<String>,
+    #[serde(rename = "Rating")]
+    pub rating: Option<f32>,
+}
+
 pub fn parse_diary_csv<P: AsRef<Path>>(path: P) -> AppResult<Vec<DiaryRow>> {
     let mut rdr = csv::Reader::from_path(path)?;
     let mut rows = Vec::new();

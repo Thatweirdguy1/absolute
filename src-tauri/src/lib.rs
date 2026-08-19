@@ -28,8 +28,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_profile,
             commands::create_profile,
+            commands::update_profile,
             commands::import_letterboxd_csv,
             commands::get_dashboard_stats,
+            commands::get_history,
             commands::check_tmdb_token,
             commands::save_tmdb_token_command
         ])

@@ -1,19 +1,27 @@
 'use client';
 
-import React, { useState } from 'react';
-import { LayoutGrid, List as ListIcon, Calendar, Filter, ChevronDown } from 'lucide-react';
-import { useStore } from '@/store/useStore';
+import React, { useState, useEffect } from 'react';
+import { LayoutGrid, List as ListIcon, Calendar, Filter, Star } from 'lucide-react';
+import { getHistory, HistoryEvent } from '@/lib/tauri-api';
 
 export default function HistoryPage() {
   const [view, setView] = useState<'grid' | 'list' | 'timeline'>('grid');
   const [search, setSearch] = useState('');
+  const [history, setHistory] = useState<HistoryEvent[]>([]);
   
-  // Dummy data / store hook
-  // const history = useStore(state => state.history);
-  const history = [
-    { id: 1, title: 'Inception', year: 2010, watchedDate: '2026-08-15', rating: 5, rewatch: true, poster: '/placeholder.jpg' },
-    // ...
-  ];
+  useEffect(() => {
+    async function load() {
+      try {
+        const data = await getHistory();
+        setHistory(data);
+      } catch (e) {
+        console.error("Failed to load history", e);
+      }
+    }
+    load();
+  }, []);
+
+  const filteredHistory = history.filter(item => item.title.toLowerCase().includes(search.toLowerCase()));
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
@@ -45,12 +53,12 @@ export default function HistoryPage() {
 
       {view === 'grid' && (
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-          {history.map(item => (
-            <div key={item.id} className="aspect-[2/3] bg-slate-800 rounded-lg overflow-hidden relative group cursor-pointer hover:ring-2 hover:ring-purple-500 transition-all">
-              <div className="absolute inset-0 flex items-center justify-center text-slate-600">Poster</div>
+          {filteredHistory.map(item => (
+            <div key={item.id} className="aspect-[2/3] bg-slate-800 rounded-lg overflow-hidden relative group cursor-pointer hover:ring-2 hover:ring-purple-500 transition-all flex flex-col items-center justify-center text-center p-2">
+              <span className="text-slate-500 text-sm italic">No Poster Yet</span>
               <div className="absolute bottom-0 inset-x-0 p-2 bg-gradient-to-t from-black/80 to-transparent">
                 <p className="text-sm font-semibold truncate text-white">{item.title}</p>
-                <p className="text-xs text-purple-400">{item.rating} ★</p>
+                {item.rating_value && <p className="text-xs text-purple-400 flex items-center gap-1"><Star size={10} /> {item.rating_value / 2}</p>}
               </div>
             </div>
           ))}
@@ -65,18 +73,16 @@ export default function HistoryPage() {
                 <th className="px-4 py-3 font-medium">Title</th>
                 <th className="px-4 py-3 font-medium">Watched Date</th>
                 <th className="px-4 py-3 font-medium">Rating</th>
-                <th className="px-4 py-3 font-medium">Status</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800">
-              {history.map(item => (
+              {filteredHistory.map(item => (
                 <tr key={item.id} className="hover:bg-slate-800/50 cursor-pointer">
                   <td className="px-4 py-3 font-medium text-slate-200">
-                    {item.title} <span className="text-slate-500 text-xs ml-2">{item.year}</span>
+                    {item.title} <span className="text-slate-500 text-xs ml-2">{item.release_year || ''}</span>
                   </td>
-                  <td className="px-4 py-3 text-slate-400">{item.watchedDate}</td>
-                  <td className="px-4 py-3 text-purple-400">{item.rating} ★</td>
-                  <td className="px-4 py-3 text-slate-400">{item.rewatch ? 'Rewatch' : 'First watch'}</td>
+                  <td className="px-4 py-3 text-slate-400">{item.watched_date || 'Unknown'}</td>
+                  <td className="px-4 py-3 text-purple-400">{item.rating_value ? item.rating_value / 2 : '-'}</td>
                 </tr>
               ))}
             </tbody>
@@ -84,20 +90,13 @@ export default function HistoryPage() {
         </div>
       )}
 
-      {history.length === 0 && (
+      {filteredHistory.length === 0 && (
         <div className="text-center py-20 text-slate-500">
           <LayoutGrid className="mx-auto h-12 w-12 mb-4 opacity-20" />
           <p>No history found.</p>
         </div>
       )}
-
-      {history.length > 0 && (
-        <div className="mt-8 text-center">
-          <button className="px-6 py-2 bg-slate-900 border border-slate-800 rounded-lg text-slate-300 hover:bg-slate-800 transition-colors">
-            Load more
-          </button>
-        </div>
-      )}
     </div>
   );
+
 }

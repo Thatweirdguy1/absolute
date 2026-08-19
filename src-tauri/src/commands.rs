@@ -47,98 +47,132 @@ pub async fn create_profile(
 }
 
 #[tauri::command]
+pub async fn update_profile(
+    display_name: String,
+    pool: tauri::State<'_, SqlitePool>
+) -> Result<bool, String> {
+    sqlx::query("UPDATE local_profiles SET display_name = ?")
+        .bind(&display_name)
+        .execute(&*pool)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
 pub async fn import_letterboxd_csv(
     file_path: String,
     pool: tauri::State<'_, SqlitePool>
 ) -> Result<usize, String> {
     let path = std::path::Path::new(&file_path);
+    let mut total_records = 0;
     
-    let csv_path = if path.extension().and_then(|e| e.to_str()) == Some("zip") {
-        // Extract to a temp directory
-        let temp_dir = std::env::temp_dir().join(Uuid::new_v4().to_string());
+    let is_zip = path.extension().and_then(|e| e.to_str()) == Some("zip");
+    
+    let temp_dir = std::env::temp_dir().join(Uuid::new_v4().to_string());
+    if is_zip {
         std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
-        
         crate::services::letterboxd::extract_and_parse_zip(&file_path, &temp_dir)
             .map_err(|e| format!("Failed to extract ZIP: {}", e))?;
+    }
+
+    let parse_and_insert = |csv_path: std::path::PathBuf, is_diary: bool, is_watched: bool, is_ratings: bool| -> Result<usize, String> {
+        if !csv_path.exists() { return Ok(0); }
+        
+        let mut rdr = csv::ReaderBuilder::new()
+            .flexible(true)
+            .from_path(&csv_path)
+            .map_err(|e| format!("Failed to open CSV: {}", e))?;
             
-        let diary_path = temp_dir.join("diary.csv");
-        if !diary_path.exists() {
-            return Err("diary.csv not found inside the uploaded ZIP archive.".to_string());
-        }
-        diary_path
-    } else {
-        path.to_path_buf()
+        let mut count = 0;
+        let pool = pool.clone();
+        
+        // We will just do it synchronously in a block to avoid async closure issues with sqlite inside the loop
+        Ok(0) // placeholder, will implement loop outside to avoid lifetime issues
     };
-
-    // Use flexible parsing to handle missing fields if any
-    let mut rdr = csv::ReaderBuilder::new()
-        .flexible(true)
-        .from_path(&csv_path)
-        .map_err(|e| format!("Failed to open CSV: {}", e))?;
-        
-    let mut rows = Vec::new();
-    for result in rdr.deserialize() {
-        let record: crate::services::letterboxd::DiaryRow = result.map_err(|e| e.to_string())?;
-        rows.push(record);
-    }
     
+    // Create an import batch
     let batch_id = Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO import_batches (id, source, status, total_count) VALUES (?, ?, ?, ?)"
-    )
-    .bind(&batch_id)
-    .bind("letterboxd_diary")
-    .bind("completed")
-    .bind(rows.len() as i32)
-    .execute(&*pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    sqlx::query("INSERT INTO import_batches (id, source, status, total_count) VALUES (?, ?, ?, ?)")
+        .bind(&batch_id).bind("letterboxd_full").bind("processing").bind(0)
+        .execute(&*pool).await.map_err(|e| e.to_string())?;
 
-    for row in &rows {
-        let media_id = format!("lbx:{}", row.name.to_lowercase().replace(" ", "-"));
-        
-        // Upsert media (mocking canonical match)
-        let _ = sqlx::query(
-            "INSERT INTO media (internal_id, title, media_type, release_year) 
-             VALUES (?, ?, 'movie', ?)
-             ON CONFLICT(internal_id) DO NOTHING"
-        )
-        .bind(&media_id)
-        .bind(&row.name)
-        .bind(row.year)
-        .execute(&*pool)
-        .await;
-
-        // Insert watch event
-        let event_id = Uuid::new_v4().to_string();
-        let _ = sqlx::query(
-            "INSERT INTO watch_events (id, media_id, watched_date) VALUES (?, ?, ?)"
-        )
-        .bind(&event_id)
-        .bind(&media_id)
-        .bind(row.watched_date.clone()) // This could be parsed to NaiveDate, keeping simple for string fallback
-        .execute(&*pool)
-        .await;
-
-        // Insert user rating if present
-        if let Some(rating) = row.rating {
-            let rating_value = (rating * 2.0) as i32; // Convert 4.5 -> 9
-            let rating_id = Uuid::new_v4().to_string();
+    // Helper macro to insert media
+    macro_rules! upsert_media {
+        ($id:expr, $name:expr, $year:expr) => {
             let _ = sqlx::query(
-                "INSERT INTO user_ratings (id, media_id, rating_value, source) 
-                 VALUES (?, ?, ?, 'letterboxd')
-                 ON CONFLICT(profile_id, media_id) DO UPDATE SET rating_value = ?"
-            )
-            .bind(&rating_id)
-            .bind(&media_id)
-            .bind(rating_value)
-            .bind(rating_value)
-            .execute(&*pool)
-            .await;
+                "INSERT INTO media (internal_id, title, media_type, release_year) VALUES (?, ?, 'movie', ?) ON CONFLICT(internal_id) DO NOTHING"
+            ).bind(&$id).bind($name).bind($year).execute(&*pool).await;
+        };
+    }
+
+    // Process Diary
+    let diary_path = if is_zip { temp_dir.join("diary.csv") } else { path.to_path_buf() };
+    if diary_path.exists() {
+        let mut rdr = csv::ReaderBuilder::new().flexible(true).from_path(&diary_path).unwrap();
+        for result in rdr.deserialize::<crate::services::letterboxd::DiaryRow>() {
+            if let Ok(row) = result {
+                total_records += 1;
+                let media_id = format!("lbx:{}", row.name.to_lowercase().replace(" ", "-"));
+                upsert_media!(media_id, &row.name, row.year);
+
+                let event_id = Uuid::new_v4().to_string();
+                let _ = sqlx::query("INSERT INTO watch_events (id, media_id, watched_date) VALUES (?, ?, ?)")
+                    .bind(&event_id).bind(&media_id).bind(row.watched_date.clone()).execute(&*pool).await;
+
+                if let Some(rating) = row.rating {
+                    let rating_value = (rating * 2.0) as i32;
+                    let rating_id = Uuid::new_v4().to_string();
+                    let _ = sqlx::query("INSERT INTO user_ratings (id, media_id, rating_value, source) VALUES (?, ?, ?, 'letterboxd') ON CONFLICT(profile_id, media_id) DO UPDATE SET rating_value = ?")
+                        .bind(&rating_id).bind(&media_id).bind(rating_value).bind(rating_value).execute(&*pool).await;
+                }
+            }
+        }
+    }
+
+    // Process Watched
+    if is_zip {
+        let watched_path = temp_dir.join("watched.csv");
+        if watched_path.exists() {
+            let mut rdr = csv::ReaderBuilder::new().flexible(true).from_path(&watched_path).unwrap();
+            for result in rdr.deserialize::<crate::services::letterboxd::WatchedRow>() {
+                if let Ok(row) = result {
+                    total_records += 1;
+                    let media_id = format!("lbx:{}", row.name.to_lowercase().replace(" ", "-"));
+                    upsert_media!(media_id, &row.name, row.year);
+                    
+                    let event_id = Uuid::new_v4().to_string();
+                    let _ = sqlx::query("INSERT INTO watch_events (id, media_id, watched_date) VALUES (?, ?, ?)")
+                        .bind(&event_id).bind(&media_id).bind(row.date.clone()).execute(&*pool).await;
+                }
+            }
+        }
+        
+        let ratings_path = temp_dir.join("ratings.csv");
+        if ratings_path.exists() {
+            let mut rdr = csv::ReaderBuilder::new().flexible(true).from_path(&ratings_path).unwrap();
+            for result in rdr.deserialize::<crate::services::letterboxd::RatingRow>() {
+                if let Ok(row) = result {
+                    total_records += 1;
+                    let media_id = format!("lbx:{}", row.name.to_lowercase().replace(" ", "-"));
+                    upsert_media!(media_id, &row.name, row.year);
+                    
+                    if let Some(rating) = row.rating {
+                        let rating_value = (rating * 2.0) as i32;
+                        let rating_id = Uuid::new_v4().to_string();
+                        let _ = sqlx::query("INSERT INTO user_ratings (id, media_id, rating_value, source) VALUES (?, ?, ?, 'letterboxd') ON CONFLICT(profile_id, media_id) DO UPDATE SET rating_value = ?")
+                            .bind(&rating_id).bind(&media_id).bind(rating_value).bind(rating_value).execute(&*pool).await;
+                    }
+                }
+            }
         }
     }
     
-    Ok(rows.len())
+    // Update batch to completed
+    sqlx::query("UPDATE import_batches SET status = 'completed', total_count = ? WHERE id = ?")
+        .bind(total_records as i32).bind(&batch_id).execute(&*pool).await.map_err(|e| e.to_string())?;
+
+    Ok(total_records)
 }
 
 #[derive(Serialize)]
@@ -198,4 +232,45 @@ pub async fn save_tmdb_token_command(token: String) -> Result<bool, String> {
 
     crate::services::credentials::save_tmdb_token(&token).map_err(|e| e.to_string())?;
     Ok(true)
+}
+
+#[derive(Serialize)]
+pub struct HistoryEvent {
+    id: String,
+    title: String,
+    media_type: String,
+    release_year: Option<i32>,
+    watched_date: Option<String>,
+    rating_value: Option<i32>,
+}
+
+#[tauri::command]
+pub async fn get_history(
+    pool: tauri::State<'_, SqlitePool>
+) -> Result<Vec<HistoryEvent>, String> {
+    let rows = sqlx::query(
+        \"SELECT we.id, m.title, m.media_type, m.release_year, we.watched_date, r.rating_value
+        FROM watch_events we
+        JOIN media m ON we.media_id = m.internal_id
+        LEFT JOIN user_ratings r ON r.media_id = m.internal_id
+        ORDER BY we.watched_date DESC NULLS LAST
+        LIMIT 100\"
+    )
+    .fetch_all(&*pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    
+    let mut history = Vec::new();
+    for row in rows {
+        use sqlx::Row;
+        history.push(HistoryEvent {
+            id: row.try_get(\"id\").unwrap_or_default(),
+            title: row.try_get(\"title\").unwrap_or_default(),
+            media_type: row.try_get(\"media_type\").unwrap_or_default(),
+            release_year: row.try_get(\"release_year\").unwrap_or(None),
+            watched_date: row.try_get(\"watched_date\").unwrap_or(None),
+            rating_value: row.try_get(\"rating_value\").unwrap_or(None),
+        });
+    }
+    Ok(history)
 }

@@ -17,7 +17,22 @@ export default function SettingsPage() {
         <div className="grid gap-4 bg-slate-900 border border-slate-800 p-6 rounded-xl">
           <div>
             <label className="block text-sm font-medium text-slate-400 mb-1">Display Name</label>
-            <input type="text" defaultValue="Cinephile" className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-purple-500" />
+            <input 
+              type="text" 
+              id="displayNameInput"
+              defaultValue="Cinephile" 
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-purple-500" 
+              onBlur={async (e) => {
+                const val = e.target.value;
+                if (!val) return;
+                try {
+                  const { updateProfile } = await import('@/lib/tauri-api');
+                  await updateProfile(val);
+                } catch (err) {
+                  console.error("Failed to update profile", err);
+                }
+              }}
+            />
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-400 mb-1">Rating System</label>

@@ -22,6 +22,10 @@ export async function createProfile(displayName: string): Promise<Profile> {
   return await invoke<Profile>('create_profile', { displayName });
 }
 
+export async function updateProfile(displayName: string): Promise<boolean> {
+  return await invoke<boolean>('update_profile', { displayName });
+}
+
 export interface DashboardStats {
   total_films: number;
   total_hours: number;
@@ -61,3 +65,16 @@ export async function importLetterboxdCsv(filePath: string): Promise<number> {
 
 
 
+
+export interface HistoryEvent {
+  id: string;
+  title: string;
+  media_type: string;
+  release_year: number | null;
+  watched_date: string | null;
+  rating_value: number | null;
+}
+
+export async function getHistory(): Promise<HistoryEvent[]> {
+  return await invoke<HistoryEvent[]>('get_history');
+}
