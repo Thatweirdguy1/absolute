@@ -1,10 +1,9 @@
 use sqlx::{sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous}, SqlitePool};
-use std::path::PathBuf;
 use std::str::FromStr;
 use tauri::AppHandle;
 use directories::ProjectDirs;
 
-pub async fn init_db(app_handle: &AppHandle) -> Result<SqlitePool, Box<dyn std::error::Error>> {
+pub async fn init_db(_app_handle: &AppHandle) -> Result<SqlitePool, Box<dyn std::error::Error>> {
     let proj_dirs = ProjectDirs::from("com", "absolute", "Absolute").expect("Could not determine project directories");
     let data_dir = proj_dirs.data_local_dir();
     

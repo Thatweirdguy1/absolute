@@ -3,7 +3,6 @@ use std::fs::File;
 use std::path::Path;
 use zip::ZipArchive;
 use serde::Deserialize;
-use chrono::NaiveDate;
 
 #[derive(Debug, Deserialize)]
 pub struct DiaryRow {

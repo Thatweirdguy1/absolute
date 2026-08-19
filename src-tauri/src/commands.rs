@@ -1,7 +1,6 @@
-use sqlx::{SqlitePool, Row};
+use sqlx::SqlitePool;
 use uuid::Uuid;
 use crate::models::LocalProfile;
-use crate::error::AppResult;
 use crate::services::letterboxd;
 use serde::Serialize;
 
