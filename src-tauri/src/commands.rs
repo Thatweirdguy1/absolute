@@ -52,13 +52,37 @@ pub async fn import_letterboxd_csv(
     file_path: String,
     pool: tauri::State<'_, SqlitePool>
 ) -> Result<usize, String> {
-    let rows = letterboxd::parse_diary_csv(&file_path).map_err(|e| e.to_string())?;
+    let path = std::path::Path::new(&file_path);
     
-    // In a full implementation, this triggers a background thread that matches against TMDB.
-    // For this vertical slice, we will inject the raw Letterboxd data directly into SQLite
-    // to prove the dashboard and end-to-end flow works immediately.
+    let csv_path = if path.extension().and_then(|e| e.to_str()) == Some("zip") {
+        // Extract to a temp directory
+        let temp_dir = std::env::temp_dir().join(Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
+        
+        crate::services::letterboxd::extract_and_parse_zip(&file_path, &temp_dir)
+            .map_err(|e| format!("Failed to extract ZIP: {}", e))?;
+            
+        let diary_path = temp_dir.join("diary.csv");
+        if !diary_path.exists() {
+            return Err("diary.csv not found inside the uploaded ZIP archive.".to_string());
+        }
+        diary_path
+    } else {
+        path.to_path_buf()
+    };
+
+    // Use flexible parsing to handle missing fields if any
+    let mut rdr = csv::ReaderBuilder::new()
+        .flexible(true)
+        .from_path(&csv_path)
+        .map_err(|e| format!("Failed to open CSV: {}", e))?;
+        
+    let mut rows = Vec::new();
+    for result in rdr.deserialize() {
+        let record: crate::services::letterboxd::DiaryRow = result.map_err(|e| e.to_string())?;
+        rows.push(record);
+    }
     
-    // Create an import batch
     let batch_id = Uuid::new_v4().to_string();
     sqlx::query(
         "INSERT INTO import_batches (id, source, status, total_count) VALUES (?, ?, ?, ?)"

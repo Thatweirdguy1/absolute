@@ -34,7 +34,7 @@ pub fn parse_diary_csv<P: AsRef<Path>>(path: P) -> AppResult<Vec<DiaryRow>> {
     Ok(rows)
 }
 
-pub fn extract_and_parse_zip<P: AsRef<Path>>(path: P, dest_dir: P) -> AppResult<()> {
+pub fn extract_and_parse_zip<P: AsRef<Path>, D: AsRef<Path>>(path: P, dest_dir: D) -> AppResult<()> {
     let file = File::open(path)?;
     let mut archive = ZipArchive::new(file)?;
     
