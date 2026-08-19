@@ -54,7 +54,9 @@ export default function ImportStudioPage() {
                   className="border-2 border-dashed border-ink-700 hover:border-purple-400 bg-ink-900/50 rounded-lg p-12 flex flex-col items-center justify-center transition-colors cursor-pointer group"
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={handleFileDrop}
-                  onClick={async () => {
+                  onClick={async (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
                     try {
                       const { open } = await import('@tauri-apps/plugin-dialog');
                       const selected = await open({
@@ -64,20 +66,18 @@ export default function ImportStudioPage() {
                       
                       if (selected) {
                         const filePath = Array.isArray(selected) ? selected[0] : selected;
-                        
-                        // Fake a File object for UI rendering since we only need the path in Tauri
                         setFiles([{ name: filePath.split(/[\\/]/).pop() || filePath, path: filePath, size: 0 } as any]);
                       }
-                    } catch (e) {
-                      console.log("Not in Tauri or error opening dialog", e);
+                    } catch (err) {
+                      console.log("Error opening dialog", err);
                       document.getElementById('fileUpload')?.click();
                     }
                   }}
                 >
                   <UploadCloud className="w-16 h-16 text-gray-500 group-hover:text-purple-400 transition-colors mb-4" />
-                  <p className="text-lg mb-2 text-center">Click to select or drag & drop your Letterboxd export ZIP/CSV here</p>
+                  <p className="text-lg mb-2 text-center">Click to select your Letterboxd export ZIP/CSV here</p>
                   <p className="text-sm text-gray-500">Maximum file size: 25MB</p>
-                  <input type="file" id="fileUpload" className="hidden" multiple accept=".zip,.csv" onChange={handleFileSelect} />
+                  <input type="file" id="fileUpload" className="hidden" accept=".zip,.csv" onChange={handleFileSelect} onClick={(e) => e.stopPropagation()} />
                 </div>
 
                 {files.length > 0 && (
@@ -85,24 +85,30 @@ export default function ImportStudioPage() {
                     {files.map((f: any, i) => (
                       <div key={i} className="flex items-center justify-between bg-ink-900 p-3 rounded text-sm text-gray-300">
                         <span>{f.name}</span>
-                        <span>{f.size ? (f.size / 1024 / 1024).toFixed(2) + ' MB' : 'Local File'}</span>
+                        <span>{f.path ? 'Native Path Ready' : 'Missing Path (Use Dialog)'}</span>
                       </div>
                     ))}
                     <button 
-                      onClick={async () => {
+                      onClick={async (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
                         try {
                           const { importLetterboxdCsv } = await import('@/lib/tauri-api');
-                          const fileObj = files[0] as any;
-                          if (fileObj.path) {
-                            const count = await importLetterboxdCsv(fileObj.path);
-                            alert(`Successfully ingested ${count} records natively! Restart or visit dashboard to see updates.`);
-                            nextStage();
+                          const fileObj = files[files.length - 1] as any; // take latest
+                          
+                          if (!fileObj.path) {
+                            alert("Error: Missing native file path. Please click the upload box to use the native file picker instead of drag & drop.");
+                            return;
                           }
-                        } catch (e) {
-                          alert("Import failed: " + e);
+                          
+                          const count = await importLetterboxdCsv(fileObj.path);
+                          alert(`Successfully ingested ${count} records natively! Visit dashboard to see updates.`);
+                          nextStage();
+                        } catch (err) {
+                          alert("Import failed: " + err);
                         }
                       }} 
-                      className="w-full mt-4 bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 px-4 rounded transition-colors flex items-center justify-center"
+                      className="w-full mt-4 bg-purple-600 hover:bg-purple-500 text-white font-bold py-3 px-4 rounded transition-colors flex items-center justify-center cursor-pointer relative z-50"
                     >
                       Process Native Import <ArrowRight className="ml-2 w-5 h-5" />
                     </button>
