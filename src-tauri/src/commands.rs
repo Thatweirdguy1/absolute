@@ -274,7 +274,7 @@ pub async fn resolve_missing_metadata(
     let tmdb = crate::services::tmdb::TmdbClient::new(token);
 
     // Get up to 50 missing items
-    let missing_media = sqlx::query!(
+    let missing_rows = sqlx::query(
         "SELECT internal_id, title, release_year FROM media WHERE tmdb_id IS NULL LIMIT 50"
     )
     .fetch_all(&*pool)
@@ -282,29 +282,36 @@ pub async fn resolve_missing_metadata(
     .map_err(|e| e.to_string())?;
 
     let mut resolved_count = 0;
+    use sqlx::Row;
 
-    for media in missing_media {
-        let result = tmdb.search_multi(&media.title, media.release_year.map(|y| y as i32)).await;
+    for row in missing_rows {
+        let internal_id: String = row.try_get("internal_id").unwrap_or_default();
+        let title: String = row.try_get("title").unwrap_or_default();
+        let release_year: Option<i32> = row.try_get("release_year").unwrap_or(None);
+        
+        let result = tmdb.search_multi(&title, release_year).await;
         if let Ok(res) = result {
             if let Some(first) = res.results.first() {
                 // Update DB
-                let _ = sqlx::query!(
-                    "UPDATE media SET tmdb_id = ?, poster_path = ?, backdrop_path = ?, overview = ?, metadata_completeness = 1 WHERE internal_id = ?",
-                    first.id,
-                    first.poster_path,
-                    first.backdrop_path,
-                    first.overview,
-                    media.internal_id
+                let _ = sqlx::query(
+                    "UPDATE media SET tmdb_id = ?, poster_path = ?, backdrop_path = ?, overview = ?, metadata_completeness = 1 WHERE internal_id = ?"
                 )
+                .bind(first.id)
+                .bind(&first.poster_path)
+                .bind(&first.backdrop_path)
+                .bind(&first.overview)
+                .bind(&internal_id)
                 .execute(&*pool)
                 .await;
                 resolved_count += 1;
             } else {
                 // Mark as not found to avoid re-querying every time
-                let _ = sqlx::query!(
-                    "UPDATE media SET metadata_completeness = -1 WHERE internal_id = ?",
-                    media.internal_id
-                ).execute(&*pool).await;
+                let _ = sqlx::query(
+                    "UPDATE media SET metadata_completeness = -1 WHERE internal_id = ?"
+                )
+                .bind(&internal_id)
+                .execute(&*pool)
+                .await;
             }
         }
     }
