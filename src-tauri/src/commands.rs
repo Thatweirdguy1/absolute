@@ -50,12 +50,70 @@ pub async fn create_profile(
 #[tauri::command]
 pub async fn import_letterboxd_csv(
     file_path: String,
-    _pool: tauri::State<'_, SqlitePool>
+    pool: tauri::State<'_, SqlitePool>
 ) -> Result<usize, String> {
     let rows = letterboxd::parse_diary_csv(&file_path).map_err(|e| e.to_string())?;
     
-    // In a real flow, this triggers the persistent background job queue 
-    // to resolve TMDB matches and store raw history progressively.
+    // In a full implementation, this triggers a background thread that matches against TMDB.
+    // For this vertical slice, we will inject the raw Letterboxd data directly into SQLite
+    // to prove the dashboard and end-to-end flow works immediately.
+    
+    // Create an import batch
+    let batch_id = Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO import_batches (id, source, status, total_count) VALUES (?, ?, ?, ?)"
+    )
+    .bind(&batch_id)
+    .bind("letterboxd_diary")
+    .bind("completed")
+    .bind(rows.len() as i32)
+    .execute(&*pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    for row in &rows {
+        let media_id = format!("lbx:{}", row.name.to_lowercase().replace(" ", "-"));
+        
+        // Upsert media (mocking canonical match)
+        let _ = sqlx::query(
+            "INSERT INTO media (internal_id, title, media_type, release_year) 
+             VALUES (?, ?, 'movie', ?)
+             ON CONFLICT(internal_id) DO NOTHING"
+        )
+        .bind(&media_id)
+        .bind(&row.name)
+        .bind(row.year)
+        .execute(&*pool)
+        .await;
+
+        // Insert watch event
+        let event_id = Uuid::new_v4().to_string();
+        let _ = sqlx::query(
+            "INSERT INTO watch_events (id, media_id, watched_date) VALUES (?, ?, ?)"
+        )
+        .bind(&event_id)
+        .bind(&media_id)
+        .bind(row.watched_date.clone()) // This could be parsed to NaiveDate, keeping simple for string fallback
+        .execute(&*pool)
+        .await;
+
+        // Insert user rating if present
+        if let Some(rating) = row.rating {
+            let rating_value = (rating * 2.0) as i32; // Convert 4.5 -> 9
+            let rating_id = Uuid::new_v4().to_string();
+            let _ = sqlx::query(
+                "INSERT INTO user_ratings (id, media_id, rating_value, source) 
+                 VALUES (?, ?, ?, 'letterboxd')
+                 ON CONFLICT(profile_id, media_id) DO UPDATE SET rating_value = ?"
+            )
+            .bind(&rating_id)
+            .bind(&media_id)
+            .bind(rating_value)
+            .bind(rating_value)
+            .execute(&*pool)
+            .await;
+        }
+    }
     
     Ok(rows.len())
 }

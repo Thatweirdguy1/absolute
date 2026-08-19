@@ -50,4 +50,14 @@ export async function saveTmdbToken(token: string): Promise<boolean> {
   return await invoke<boolean>('save_tmdb_token_command', { token });
 }
 
+export async function importLetterboxdCsv(filePath: string): Promise<number> {
+  try {
+    return await invoke<number>('import_letterboxd_csv', { filePath });
+  } catch (error) {
+    console.error('Failed to import CSV:', error);
+    throw error;
+  }
+}
+
+
 
