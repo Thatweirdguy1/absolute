@@ -27,7 +27,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_profile,
             commands::create_profile,
-            commands::import_letterboxd_csv
+            commands::import_letterboxd_csv,
+            commands::get_dashboard_stats
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

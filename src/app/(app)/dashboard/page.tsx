@@ -1,16 +1,10 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import Link from 'next/link';
 import { Play, Clock, Star, Globe, ChevronRight, Activity, TrendingUp, Compass, Search } from 'lucide-react';
-
-const stats = [
-  { label: 'Total Films', value: '1,492', icon: Play, trend: '+12 this month' },
-  { label: 'Hours Watched', value: '3,024', icon: Clock, trend: '+28h this month' },
-  { label: 'Avg Rating', value: '3.8', icon: Star, trend: '+0.1 this year' },
-  { label: 'Countries', value: '42', icon: Globe, trend: '+2 new' },
-];
+import { getDashboardStats, DashboardStats } from '@/lib/tauri-api';
 
 const recentActivity = [
   { id: 1, title: 'Dune: Part Two', rating: 4.5, date: '2 days ago', poster: 'bg-ink-800' },
@@ -34,6 +28,23 @@ const exploreLinks = [
 ];
 
 export default function DashboardPage() {
+  const [statsData, setStatsData] = useState<DashboardStats | null>(null);
+
+  useEffect(() => {
+    async function loadStats() {
+      const data = await getDashboardStats();
+      setStatsData(data);
+    }
+    loadStats();
+  }, []);
+
+  const stats = [
+    { label: 'Total Films', value: statsData?.total_films.toLocaleString() || '...', icon: Play, trend: 'From Local DB' },
+    { label: 'Hours Watched', value: statsData?.total_hours.toLocaleString() || '...', icon: Clock, trend: 'From Local DB' },
+    { label: 'Avg Rating', value: statsData?.avg_rating.toFixed(1) || '...', icon: Star, trend: 'From Local DB' },
+    { label: 'Countries', value: '42', icon: Globe, trend: '+2 new' },
+  ];
+
   return (
     <div className="min-h-screen bg-ink-950 text-smoke-200 font-sans pb-24">
       {/* Hero Section */}
