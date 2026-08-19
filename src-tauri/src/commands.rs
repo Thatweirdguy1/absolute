@@ -76,22 +76,6 @@ pub async fn import_letterboxd_csv(
             .map_err(|e| format!("Failed to extract ZIP: {}", e))?;
     }
 
-    let parse_and_insert = |csv_path: std::path::PathBuf, is_diary: bool, is_watched: bool, is_ratings: bool| -> Result<usize, String> {
-        if !csv_path.exists() { return Ok(0); }
-        
-        let mut rdr = csv::ReaderBuilder::new()
-            .flexible(true)
-            .from_path(&csv_path)
-            .map_err(|e| format!("Failed to open CSV: {}", e))?;
-            
-        let mut count = 0;
-        let pool = pool.clone();
-        
-        // We will just do it synchronously in a block to avoid async closure issues with sqlite inside the loop
-        Ok(0) // placeholder, will implement loop outside to avoid lifetime issues
-    };
-    
-    // Create an import batch
     let batch_id = Uuid::new_v4().to_string();
     sqlx::query("INSERT INTO import_batches (id, source, status, total_count) VALUES (?, ?, ?, ?)")
         .bind(&batch_id).bind("letterboxd_full").bind("processing").bind(0)
