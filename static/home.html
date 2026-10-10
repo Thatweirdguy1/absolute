@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Absolute · The app for absolute cinema</title>
+  <link rel="icon" href="/absolute-logo-v2-transparent.png">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/catalog.css">
+  <link rel="stylesheet" href="/home.css">
+</head>
+<body>
+  <header class="catalog-nav home-nav">
+    <a href="/" aria-label="Absolute home"><img src="/absolute-logo-v2-transparent.png" alt=""></a>
+    <nav aria-label="Primary"><a href="/browse">Browse</a><a href="/library">Library</a><a href="/create">Create Spectrum</a></nav>
+    <form class="header-search global-search" role="search"><input class="global-search-input" type="search" placeholder="Search any movie" aria-label="Search any movie"><button type="submit">Search</button><div class="header-results global-results" aria-live="polite"></div></form>
+  </header>
+  <main class="home-page">
+    <div id="cinema-collage" class="cinema-collage" aria-hidden="true"></div>
+    <div class="home-shade"></div>
+    <section class="welcome">
+      <p class="eyebrow">Welcome to Absolute</p>
+      <h1>The absolute app<br>for absolute cinema.</h1>
+      <p>Discover films, preserve their colours, and build a private cinematic archive that belongs to you.</p>
+      <div class="home-actions"><a href="/create">Create a Spectrum</a><a href="/library#import-letterboxd">Import Letterboxd</a><a href="/library">Enter your library</a></div>
+    </section>
+  </main>
+  <script src="/home.js"></script>
+  <script src="/search.js"></script>
+</body>
+</html>

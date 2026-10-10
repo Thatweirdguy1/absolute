@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Absolute Spectrum</title>
+  <link rel="icon" href="/absolute-logo-v2-transparent.png">
+  <link rel="stylesheet" href="/styles.css">
+  <style>.secondary{min-height:44px;padding:0 14px;border:1px solid var(--line);border-radius:9px;background:transparent;color:var(--text);cursor:pointer}.secondary:hover{border-color:rgba(97,169,130,.5)}.secondary:disabled{cursor:wait;opacity:.55}.suggestion-note{min-height:20px;margin:10px 0 0;color:var(--muted);font-size:.76rem;line-height:1.45}</style>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand-link" href="/" aria-label="Absolute home"><img class="brand" src="/absolute-logo-v2-transparent.png" alt="Absolute"></a>
+      <nav aria-label="Primary"><a href="/browse">Browse</a><a href="/library">Library</a><a class="active" href="/create">Create</a><a href="#exports">Exports</a></nav>
+      <form class="header-search global-search" role="search"><input class="global-search-input" type="search" placeholder="Search any movie" aria-label="Search any movie"><button type="submit">Search</button><div class="header-results global-results" aria-live="polite"></div></form>
+      <button class="icon-button" type="button" aria-label="About Absolute">?</button>
+    </header>
+
+    <main>
+      <aside class="sidebar" id="film">
+        <section class="film-heading">
+          <p class="eyebrow">Your next Spectrum</p>
+          <h1 id="movie-title">Teenage Sex and Death at Camp Miasma</h1>
+          <p id="movie-details">Theatrical cut · 2026 · 1h 52m</p>
+        </section>
+
+        <section class="step">
+          <div class="step-title"><span>1</span><h2>Choose your film</h2></div>
+          <label for="movie-search">Find it on TMDB</label>
+          <div class="search-row"><input id="movie-search" value="Teenage Sex and Death at Camp Miasma" autocomplete="off"><button id="search-button" type="button">Search</button></div>
+          <div id="search-results" class="results" aria-live="polite"></div>
+          <button id="file-button" class="file-card" type="button">
+            <span class="clapper" aria-hidden="true">▰</span><span><strong id="file-name">Choose the movie file</strong><small id="file-note">The file stays on this computer</small></span><span aria-hidden="true">›</span>
+          </button>
+        </section>
+
+        <section class="step">
+          <div class="step-title"><span>2</span><h2>Choose the part of the film</h2></div>
+          <p class="step-copy">Leave out the studio logos and closing credits.</p>
+          <button id="suggest-button" class="secondary" type="button">Suggest automatically</button>
+          <div class="time-grid">
+            <label>Start after studio logos<input id="start-time" value="00:01:24" inputmode="numeric"></label>
+            <label>End before credits<input id="end-time" value="01:47:18" inputmode="numeric"></label>
+          </div>
+          <p id="suggestion-note" class="suggestion-note" aria-live="polite"></p>
+        </section>
+
+        <section class="step final-step">
+          <div class="step-title"><span>3</span><h2>Create its Spectrum</h2></div>
+          <p class="step-copy">Absolute will turn the film into one continuous journey through colour.</p>
+          <button id="generate-button" class="primary" type="button">Create Spectrum</button>
+          <div class="progress" hidden><div id="progress-fill"></div></div>
+          <p id="status" class="status" role="status">Ready when you are.</p>
+        </section>
+      </aside>
+
+      <section class="stage" id="spectrum">
+        <div class="stage-toolbar">
+          <span id="stage-title">A film remembered in colour</span>
+          <div id="exports"><button class="export" data-kind="png" disabled>Image</button><a id="svg-export" class="export disabled" aria-disabled="true">SVG</a><a id="json-export" class="export disabled" aria-disabled="true">Spectrum data</a></div>
+        </div>
+        <div class="canvas-wrap">
+          <canvas id="spectrum-canvas" width="2048" height="512" aria-label="Absolute Spectrum preview"></canvas>
+          <div id="empty-state" class="empty-state"><h2>Your film,<br>remembered in colour.</h2><p>Every moment will take its place here, from first scene to last.</p></div>
+        </div>
+        <div class="timeline"><span>First scene</span><span id="spectrum-id">Private and local</span><span>Last scene</span></div>
+      </section>
+    </main>
+  </div>
+  <script src="/app.js"></script>
+  <script src="/search.js"></script>
+</body>
+</html>
