@@ -451,7 +451,7 @@ def tmdb_get(endpoint: str, parameters: dict | None = None) -> dict:
 
 
 def spectrum_rows(tmdb_id: int | None = None) -> list[dict]:
-    query = "SELECT id, tmdb_id, title, year, edition, start_seconds, end_seconds, algorithm, created_at FROM spectra"
+    query = "SELECT id, tmdb_id, title, year, edition, start_seconds, end_seconds, algorithm, created_at, colors_json FROM spectra"
     parameters: tuple = ()
     if tmdb_id is not None:
         query += " WHERE tmdb_id = ?"
@@ -462,6 +462,7 @@ def spectrum_rows(tmdb_id: int | None = None) -> list[dict]:
     return [{
         "id": row[0], "tmdb_id": row[1], "title": row[2], "year": row[3], "edition": row[4],
         "start_seconds": row[5], "end_seconds": row[6], "algorithm": row[7], "created_at": row[8],
+        "colors": json.loads(row[9]) if tmdb_id is not None else [],
         "svg_url": f"/output/{row[0].lower()}.svg", "json_url": f"/output/{row[0].lower()}.json",
     } for row in rows]
 
@@ -487,6 +488,7 @@ def movie_record(tmdb_id: int) -> dict:
         "runtime": metadata.get("runtime"), "overview": metadata.get("overview"), "tagline": metadata.get("tagline"),
         "poster_url": f"https://image.tmdb.org/t/p/w780{metadata['poster_path']}" if metadata.get("poster_path") else None,
         "backdrop_url": f"https://image.tmdb.org/t/p/original{metadata['backdrop_path']}" if metadata.get("backdrop_path") else None,
+        "backdrops": [f"https://image.tmdb.org/t/p/original{item['file_path']}" for item in metadata.get("images", {}).get("backdrops", [])],
         "genres": [item["name"] for item in metadata.get("genres", [])],
         "countries": [item["name"] for item in metadata.get("production_countries", [])],
         "languages": [item["english_name"] for item in metadata.get("spoken_languages", [])],

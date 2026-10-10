@@ -30,7 +30,17 @@ function spectrumCard(item) {
   [['Download artwork', item.svg_url], ['Spectrum data', item.json_url]].forEach(([label, href]) => {
     const link = el('a', 'catalog-button', label); link.href = href; link.download = ''; links.append(link);
   });
-  meta.append(links); card.append(image, meta); return card;
+  const themeControls = el('div', 'spectrum-theme-controls');
+  const chooseTheme = el('button', 'catalog-button', 'Choose a theme colour'); chooseTheme.type = 'button';
+  const resetTheme = el('button', 'quiet-action', 'Reset theme'); resetTheme.type = 'button';
+  const slider = el('input', 'spectrum-theme-range'); slider.type = 'range'; slider.min = '0'; slider.max = String(Math.max(0, item.colors.length - 1)); slider.value = String(Math.floor(item.colors.length / 2)); slider.hidden = true; slider.setAttribute('aria-label', `Choose a colour from ${item.title} Spectrum`);
+  const applyAt = index => { const color = item.colors[Math.max(0, Math.min(item.colors.length - 1, index))]; if (color) window.setAbsoluteTheme?.(color); };
+  chooseTheme.addEventListener('click', () => { const open = slider.hidden; slider.hidden = !open; card.classList.toggle('theme-picking', open); chooseTheme.textContent = open ? 'Click or slide across the Spectrum' : 'Choose a theme colour'; if (open) slider.focus(); });
+  slider.addEventListener('input', () => applyAt(Number(slider.value)));
+  image.addEventListener('click', event => { if (slider.hidden || !item.colors.length) return; const box = image.getBoundingClientRect(); const index = Math.round((event.clientX - box.left) / box.width * (item.colors.length - 1)); slider.value = String(index); applyAt(index); });
+  resetTheme.addEventListener('click', () => window.setAbsoluteTheme?.(null));
+  themeControls.append(chooseTheme, resetTheme, slider);
+  meta.append(links, themeControls); card.append(image, meta); return card;
 }
 
 function personCard(person, role) {
@@ -69,7 +79,8 @@ function activitySection(movie) {
   const section = el('section', 'activity-section');
   const status = el('p', 'activity-status', 'Opening your diary…');
   const banner = el('div', 'diary-banner');
-  if (movie.backdrop_url) banner.style.backgroundImage = `linear-gradient(90deg, rgba(9,12,12,.98), rgba(9,12,12,.72)), url("${movie.backdrop_url}")`;
+  const diaryBackdrop = (movie.backdrops || []).find(url => url !== movie.backdrop_url) || movie.backdrop_url;
+  if (diaryBackdrop) banner.style.backgroundImage = `linear-gradient(90deg, rgba(9,12,12,.98), rgba(9,12,12,.72)), url("${diaryBackdrop}")`;
   const bannerCopy = el('div');
   bannerCopy.append(el('p', 'eyebrow', 'Your film diary'), el('h2', '', 'Remember this film.'));
   const diaryFacts = el('p', 'diary-facts');
