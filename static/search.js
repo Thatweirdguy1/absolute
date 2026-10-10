@@ -1,4 +1,4 @@
-window.setAbsoluteTheme = color => {
+window.setAbsoluteTheme = (color, persist = true) => {
   const fallback = '#83a68f';
   const chosen = /^#[0-9a-f]{6}$/i.test(color || '') ? color : fallback;
   const red = parseInt(chosen.slice(1, 3), 16), green = parseInt(chosen.slice(3, 5), 16), blue = parseInt(chosen.slice(5, 7), 16);
@@ -7,9 +7,9 @@ window.setAbsoluteTheme = color => {
   document.documentElement.style.setProperty('--absolute-accent-rgb', `${red},${green},${blue}`);
   document.documentElement.style.setProperty('--absolute-accent-ink', light > 145 ? '#07100a' : '#f7f5ef');
   document.documentElement.style.setProperty('--emerald', chosen);
-  if (color) localStorage.setItem('absolute-theme', chosen); else localStorage.removeItem('absolute-theme');
+  if (persist) { if (color) localStorage.setItem('absolute-theme', chosen); else localStorage.removeItem('absolute-theme'); }
 };
-window.setAbsoluteTheme(localStorage.getItem('absolute-theme'));
+window.setAbsoluteTheme(localStorage.getItem('absolute-theme'), false);
 
 document.querySelectorAll('.global-search').forEach(form => form.addEventListener('submit', async event => {
   event.preventDefault();
