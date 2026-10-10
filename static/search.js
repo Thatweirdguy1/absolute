@@ -3,7 +3,7 @@ document.querySelectorAll('.global-search').forEach(form => form.addEventListene
   const input = form.querySelector('.global-search-input');
   const results = form.querySelector('.global-results');
   if (!input.value.trim()) return input.focus();
-  results.textContent = 'Searching…';
+  form.classList.add('is-searching'); results.textContent = 'Searching…';
   try {
     const response = await fetch(`/api/tmdb/search?q=${encodeURIComponent(input.value)}`);
     const data = await response.json();
@@ -15,4 +15,5 @@ document.querySelectorAll('.global-search').forEach(form => form.addEventListene
       link.append(title, year); return link;
     }));
   } catch (error) { results.textContent = error.message; }
+  finally { form.classList.remove('is-searching'); }
 }));

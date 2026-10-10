@@ -7,6 +7,14 @@ const el = (tag, className, text) => {
   return node;
 };
 
+function movieSkeleton() {
+  const shell = el('div', 'movie-skeleton'); shell.setAttribute('aria-hidden', 'true');
+  const hero = el('div', 'movie-skeleton-hero'); hero.append(el('span', 'skeleton skeleton-kicker'), el('span', 'skeleton skeleton-heading'), el('span', 'skeleton skeleton-heading short'), el('span', 'skeleton skeleton-copy wide'), el('span', 'skeleton skeleton-copy'));
+  const rail = el('div', 'movie-skeleton-rail');
+  for (let index = 0; index < 4; index += 1) rail.append(el('span', 'skeleton skeleton-poster'));
+  shell.append(hero, rail); return shell;
+}
+
 function facts(movie) {
   return [movie.year, movie.runtime && `${Math.floor(movie.runtime / 60)}h ${movie.runtime % 60}m`, ...movie.genres].filter(Boolean).join(' · ');
 }
@@ -96,8 +104,10 @@ function activitySection(movie) {
   const commentBox = el('div', 'diary-form'); const commentHead = el('div', 'diary-form-head'); commentHead.append(el('h3', '', 'Private comments'), el('span', '', 'Only visible to you')); commentBox.append(commentHead, el('p', 'form-note', 'Personal thoughts, emotional reactions, or memory anchors.'), comment, commentButton);
   const history = el('div', 'diary-history');
 
+  const controls = [watched, watchlist, rating, clearRating, saveReview, deleteReview, logButton, commentButton];
+  const busy = value => { section.classList.toggle('is-saving', value); status.classList.toggle('is-loading', value); controls.forEach(control => { control.disabled = value; }); };
   const post = async body => {
-    status.textContent = 'Saving…';
+    busy(true); status.textContent = 'Saving to your private archive…';
     const response = await fetch(`/api/activity/${movie.id}`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
     const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Could not save'); return data;
   };
@@ -120,7 +130,7 @@ function activitySection(movie) {
     history.replaceChildren(...(items.length ? items : [el('div', 'history-empty', 'No viewings or comments yet. Your film memories will live here.') ]));
     status.textContent = 'Saved privately on this computer.';
   };
-  const act = async body => { try { render(await post(body)); } catch (error) { status.textContent = error.message; } };
+  const act = async body => { try { render(await post(body)); } catch (error) { status.textContent = error.message; } finally { busy(false); } };
   watched.addEventListener('click', () => act({action:'state', watched:!watched.classList.contains('active')}));
   watchlist.addEventListener('click', () => act({action:'state', watchlist:!watchlist.classList.contains('active')}));
   rating.addEventListener('change', () => act({action:'state', rating:rating.value}));
@@ -132,7 +142,8 @@ function activitySection(movie) {
   const grid = el('div', 'diary-grid'); grid.append(reviewBox, logBox, commentBox);
   const historyHead = el('div', 'history-head'); historyHead.append(el('p', 'eyebrow', 'Film ledger history'), el('span', '', 'Viewings, reviews and private notes'));
   section.append(banner, actions, grid, historyHead, history);
-  fetch(`/api/activity/${movie.id}`).then(response => response.json()).then(render).catch(error => { status.textContent = error.message; });
+  status.classList.add('is-loading');
+  fetch(`/api/activity/${movie.id}`).then(response => response.json()).then(render).catch(error => { status.textContent = error.message; }).finally(() => status.classList.remove('is-loading'));
   return section;
 }
 
@@ -172,8 +183,9 @@ async function loadMovie() {
 
     const cast = peopleSection('Cast', movie.cast, person => person.character || 'Role not listed');
     const crew = peopleSection('Crew', movie.crew, person => person.job || person.department || 'Credit not listed');
-    page.replaceChildren(hero, activitySection(movie), posters, spectrum, cast, crew);
-  } catch (error) { page.replaceChildren(el('p', 'loading', error.message)); }
+    page.replaceChildren(hero, activitySection(movie), posters, spectrum, cast, crew); page.setAttribute('aria-busy', 'false');
+  } catch (error) { page.replaceChildren(el('p', 'loading', error.message)); page.setAttribute('aria-busy', 'false'); }
 }
 
+page.replaceChildren(movieSkeleton());
 loadMovie();

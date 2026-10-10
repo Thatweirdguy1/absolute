@@ -9,11 +9,12 @@ const importFile = document.querySelector('#letterboxd-file');
 const importButton = document.querySelector('#letterboxd-import');
 const importStatus = document.querySelector('#import-status');
 const importReport = document.querySelector('#import-report');
-let library = {diary:[], watched:[], watchlist:[], reviews:[], rated:[], spectra:[]};
+let library = {diary:[], watched:[], watchlist:[], rated:[], spectra:[]};
 let view = 'diary';
 let layout = 'grid';
 
 const empty = text => Object.assign(document.createElement('p'), {className:'library-empty', textContent:text});
+const skeletons = (count = 10) => Array.from({length:count}, () => { const item = document.createElement('div'); item.className = 'poster-skeleton'; item.setAttribute('aria-hidden','true'); item.append(Object.assign(document.createElement('span'),{className:'skeleton skeleton-poster'}), Object.assign(document.createElement('span'),{className:'skeleton skeleton-title'}), Object.assign(document.createElement('span'),{className:'skeleton skeleton-copy'})); return item; });
 
 async function activity(tmdbId, body) {
   const response = await fetch(`/api/activity/${tmdbId}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
@@ -33,8 +34,6 @@ function actions(item, kind) {
       try { await activity(item.tmdb_id, {action:'edit_log', id:item.id, watched_on, rating, review, rewatch:item.rewatch}); } catch (error) { alert(error.message); }
     });
     const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = 'Delete'; remove.addEventListener('click', async () => { if (confirm(`Delete this ${item.watched_on} viewing of ${item.title}?`)) await activity(item.tmdb_id, {action:'delete_log', id:item.id}); }); row.append(remove);
-  } else if (kind === 'reviews') {
-    const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = 'Delete review'; remove.addEventListener('click', async () => { if (confirm(`Delete your review of ${item.title}?`)) await activity(item.tmdb_id, {action:'state', review:'', spoiler:false}); }); row.append(remove);
   } else if (kind === 'rated') {
     const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = 'Clear rating'; remove.addEventListener('click', async () => { if (confirm(`Clear your rating for ${item.title}?`)) await activity(item.tmdb_id, {action:'state', rating:null}); }); row.append(remove);
   }
@@ -51,10 +50,9 @@ function card(item, kind) {
   const detail = document.createElement('p');
   detail.textContent = kind === 'diary' ? `${item.watched_on}${item.rewatch ? ' · Rewatch' : ''}${item.rating ? ` · ${item.rating} ★` : ''}` : `${item.year || 'Year unknown'}${item.rating ? ` · ${item.rating} ★` : ''}${kind === 'spectra' ? ` · ${item.edition}` : ''}`;
   copy.append(title, detail);
-  if (item.review) { const review = document.createElement('p'); review.className = 'library-review'; review.textContent = item.spoiler ? 'Review contains spoilers' : item.review; copy.append(review); }
   if (kind === 'spectra') { const code = document.createElement('small'); code.textContent = item.id; copy.append(code); }
   link.append(copy); card.append(link);
-  if (['diary','reviews','rated'].includes(kind)) card.append(actions(item, kind));
+  if (['diary','rated'].includes(kind)) card.append(actions(item, kind));
   return card;
 }
 
@@ -66,7 +64,7 @@ function sorted(items) {
 
 function render() {
   const query = search.value.trim().toLowerCase();
-  const items = sorted((library[view] || []).filter(item => !query || `${item.title} ${item.review||''} ${item.year||''}`.toLowerCase().includes(query)));
+  const items = sorted((library[view] || []).filter(item => !query || `${item.title} ${item.year||''}`.toLowerCase().includes(query)));
   label.textContent = view === 'spectra' ? 'Absolute Spectrums' : view[0].toUpperCase() + view.slice(1);
   count.textContent = `${items.length} ${items.length === 1 ? 'entry' : 'entries'}`;
   content.className = layout === 'grid' ? 'library-grid' : 'library-list';
@@ -74,8 +72,10 @@ function render() {
 }
 
 async function loadLibrary() {
+  content.className = 'library-grid'; content.setAttribute('aria-busy','true'); content.replaceChildren(...skeletons());
   try { const response = await fetch('/api/library'); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Library unavailable'); library = data; render(); }
   catch (error) { content.replaceChildren(empty(error.message)); }
+  finally { content.setAttribute('aria-busy','false'); }
 }
 
 async function loadReport() {
@@ -85,7 +85,7 @@ async function loadReport() {
 async function pollImport() {
   const response = await fetch('/api/import-job'); const data = await response.json();
   importStatus.textContent = data.error ? `${data.message}: ${data.error}` : `${data.message}${data.state === 'running' ? ` ${data.progress}%` : ''}`;
-  importButton.disabled = data.state === 'running';
+  importButton.disabled = data.state === 'running'; importButton.classList.toggle('is-loading', data.state === 'running');
   if (data.state === 'running') setTimeout(pollImport, 900);
   if (data.state === 'complete') { await loadLibrary(); await loadReport(); }
 }
@@ -95,9 +95,9 @@ layoutButtons.forEach(button => button.addEventListener('click', () => { layout 
 search.addEventListener('input', render); sort.addEventListener('change', render);
 importButton.addEventListener('click', async () => {
   const file = importFile.files[0]; if (!file) return importStatus.textContent = 'Choose your Letterboxd export ZIP first.';
-  importButton.disabled = true; importStatus.textContent = 'Uploading your export…';
+  importButton.disabled = true; importButton.classList.add('is-loading'); importStatus.textContent = 'Uploading your export…';
   try { const response = await fetch('/api/import-letterboxd', {method:'POST', headers:{'Content-Type':'application/zip'}, body:file}); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Import could not start'); pollImport(); }
-  catch (error) { importStatus.textContent = error.message; importButton.disabled = false; }
+  catch (error) { importStatus.textContent = error.message; importButton.disabled = false; importButton.classList.remove('is-loading'); }
 });
 
 loadLibrary(); loadReport(); pollImport();

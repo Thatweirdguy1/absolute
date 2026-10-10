@@ -1,6 +1,7 @@
 const page = document.querySelector('#person-page');
 const personId = location.pathname.split('/').filter(Boolean).pop();
 const el = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text != null) node.textContent = text; return node; };
+function personSkeleton() { const shell=el('div','person-skeleton'); const hero=el('div','person-skeleton-hero'); hero.append(el('span','skeleton skeleton-person'),el('div','person-skeleton-copy')); hero.lastChild.append(el('span','skeleton skeleton-kicker'),el('span','skeleton skeleton-heading'),el('span','skeleton skeleton-copy wide'),el('span','skeleton skeleton-copy wide')); const rail=el('div','movie-skeleton-rail'); for(let i=0;i<6;i+=1) rail.append(el('span','skeleton skeleton-poster')); shell.append(hero,rail); shell.setAttribute('aria-hidden','true'); return shell; }
 function creditCard(credit) {
   const card = el(credit.media_type === 'movie' ? 'a' : 'article', 'credit-card');
   if (credit.media_type === 'movie') card.href = `/movie/${credit.id}`;
@@ -38,9 +39,10 @@ async function loadPerson() {
       ['Writer', person.crew.filter(item => /Writer|Screenplay|Story|Teleplay/.test(item.role))],
       ['Executive producer', person.crew.filter(item => item.role === 'Executive Producer')]
     ];
-    page.replaceChildren(hero, creditSection('Cast credits', person.cast, allHref, true), ...groups.filter(([, credits]) => credits.length).map(([label, credits]) => creditSection(label, credits, allHref)));
+    page.replaceChildren(hero, creditSection('Cast credits', person.cast, allHref, true), ...groups.filter(([, credits]) => credits.length).map(([label, credits]) => creditSection(label, credits, allHref))); page.setAttribute('aria-busy','false');
     const renderPreviews = () => document.querySelectorAll('.credits-grid').forEach(grid => grid._renderPreview());
     requestAnimationFrame(renderPreviews); window.addEventListener('resize', renderPreviews, { passive: true });
-  } catch (error) { page.replaceChildren(el('p', 'loading', error.message)); }
+  } catch (error) { page.replaceChildren(el('p', 'loading', error.message)); page.setAttribute('aria-busy','false'); }
 }
+page.replaceChildren(personSkeleton());
 loadPerson();

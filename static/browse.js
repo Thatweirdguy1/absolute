@@ -2,6 +2,14 @@ const grid = document.querySelector('#popular-grid');
 const more = document.querySelector('#popular-more');
 let page = 1;
 
+function skeletons(count = 12) {
+  return Array.from({length: count}, () => {
+    const item = document.createElement('div'); item.className = 'poster-skeleton'; item.setAttribute('aria-hidden', 'true');
+    item.append(Object.assign(document.createElement('span'), {className:'skeleton skeleton-poster'}), Object.assign(document.createElement('span'), {className:'skeleton skeleton-title'}), Object.assign(document.createElement('span'), {className:'skeleton skeleton-copy'}));
+    return item;
+  });
+}
+
 function card(movie, rank) {
   const link = document.createElement('a'); link.className = 'popular-card'; link.href = `/movie/${movie.id}`;
   if (movie.poster_url) { const image = document.createElement('img'); image.src = movie.poster_url; image.alt = ''; image.loading = 'lazy'; link.append(image); }
@@ -13,13 +21,15 @@ function card(movie, rank) {
 }
 
 async function load() {
-  more.disabled = true;
+  more.disabled = true; more.classList.toggle('is-loading', page > 1);
+  if (page === 1) grid.replaceChildren(...skeletons());
   try {
     const response = await fetch(`/api/popular?page=${page}`); const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Popular films are unavailable');
-    if (page === 1) grid.replaceChildren();
+    if (page === 1) grid.replaceChildren(); grid.setAttribute('aria-busy', 'false');
     const start = (page - 1) * 20; data.results.forEach((movie, index) => grid.append(card(movie, start + index + 1)));
     more.hidden = page >= data.total_pages; more.disabled = false; page += 1;
-  } catch (error) { if (page === 1) grid.textContent = error.message; more.hidden = true; }
+  } catch (error) { if (page === 1) grid.textContent = error.message; more.hidden = true; grid.setAttribute('aria-busy', 'false'); }
+  finally { more.classList.remove('is-loading'); }
 }
 more.addEventListener('click', load); load();

@@ -6,7 +6,7 @@
   <title>Your Library · Absolute</title>
   <link rel="icon" href="/absolute-logo-v2-transparent.png">
   <link rel="stylesheet" href="/styles.css">
-  <link rel="stylesheet" href="/catalog.css?v=library2">
+  <link rel="stylesheet" href="/catalog.css?v=loading1">
 </head>
 <body>
   <header class="catalog-nav">
@@ -23,7 +23,7 @@
     </section>
     <section class="library-archive">
       <div class="library-tabs" role="tablist" aria-label="Library sections">
-        <button class="active" data-view="diary" role="tab">Diary</button><button data-view="watched" role="tab">Watched</button><button data-view="watchlist" role="tab">Watchlist</button><button data-view="reviews" role="tab">Reviews</button><button data-view="rated" role="tab">Rated</button><button data-view="spectra" role="tab">Spectrums</button>
+        <button class="active" data-view="diary" role="tab">Diary</button><button data-view="watched" role="tab">Watched</button><button data-view="watchlist" role="tab">Watchlist</button><button data-view="rated" role="tab">Rated</button><button data-view="spectra" role="tab">Spectrums</button>
       </div>
       <div class="library-tools">
         <input id="library-search" type="search" placeholder="Search this collection" aria-label="Search this collection">
@@ -31,11 +31,11 @@
         <div class="view-switch" aria-label="View"><button class="active" data-layout="grid" aria-label="Poster grid">Grid</button><button data-layout="list" aria-label="List view">List</button></div>
       </div>
       <div class="archive-heading"><p id="archive-label" class="eyebrow">Diary</p><span id="archive-count"></span></div>
-      <div id="library-content" class="library-grid" aria-live="polite"><p class="loading">Opening your library…</p></div>
+      <div id="library-content" class="library-grid" aria-live="polite" aria-busy="true"></div>
     </section>
   </main>
   <footer class="catalog-footer">This product uses the TMDB API but is not endorsed or certified by TMDB.</footer>
-  <script src="/library.js?v=library2"></script>
-  <script src="/search.js"></script>
+  <script src="/library.js?v=loading1"></script>
+  <script src="/search.js?v=loading1"></script>
 </body>
 </html>
