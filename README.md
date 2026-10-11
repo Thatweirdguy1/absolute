@@ -63,7 +63,9 @@ No Python packages are required; the application uses the standard library.
 
 ## Importing from Letterboxd
 
-Request your export from Letterboxd's **Settings → Import & Export**, then upload the downloaded ZIP from Absolute's home or library page. The import report shows source, applied, and unmatched counts so skipped titles are visible rather than silently discarded.
+Request your export from Letterboxd's **Settings → Import & Export**, then upload the downloaded ZIP from Absolute's home or library page. Absolute checks each film link against Letterboxd's TMDB identity, saves confirmed matches for later imports, and lists uncertain or corrected links in the library's **Match audit**. Review uncertain matches there or choose the correct TMDB result. The report shows source, applied, and unmatched counts; a linked record is not necessarily a verified match.
+
+The library also offers a complete ZIP backup and restore. Each import creates a local database snapshot first, and restoring a backup saves the current archive before replacing it. Backups and imported data stay under `data/` and are excluded from Git.
 
 ## Generating an Absolute Spectrum
 

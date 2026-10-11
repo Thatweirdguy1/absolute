@@ -85,11 +85,10 @@ async function loadReport() {
   try {
     const data = await (await fetch('/api/import-report')).json(); if (!data.report) return;
     const rows = Object.entries(data.report.source).map(([key,total]) => `${key}: ${data.report.applied[key]||0}/${total}`).join(' · ');
-    const summary = document.createElement('p'); summary.textContent = `Last import verified — ${rows}${data.report.unmatched.length ? ` · ${data.report.unmatched.length} unmatched` : ' · all matched'}`;
+    const summary = document.createElement('p'); summary.textContent = `Last import — ${rows}${data.report.unmatched.length ? ` · ${data.report.unmatched.length} unmatched` : ' · all records linked'}`;
     const unique = [...new Map(data.report.unmatched.map(item => [`${item.name}\0${item.year}`, item])).values()];
     const list = document.createElement('ul'); list.className = 'unmatched-list';
-    unique.forEach(item => {
-      const entry = document.createElement('li'); const title = document.createElement('span'); title.textContent = `${item.name} (${item.year || 'year unknown'})`;
+    function matchEditor(item, entry) {
       const query = document.createElement('input'); query.value = item.name; query.setAttribute('aria-label', `Search TMDB match for ${item.name}`);
       const find = document.createElement('button'); find.type = 'button'; find.className = 'quiet-action'; find.textContent = 'Find match';
       find.addEventListener('click', async () => {
@@ -101,12 +100,39 @@ async function loadReport() {
           result.results.forEach(candidate => { const option = document.createElement('option'); option.value = `${candidate.media_type}:${Math.abs(candidate.id)}`; option.textContent = `${candidate.title} (${candidate.year || 'year unknown'}) · ${candidate.media_type === 'tv' ? 'TV' : 'Film'}`; select.append(option); });
           const save = document.createElement('button'); save.type = 'button'; save.className = 'catalog-button'; save.textContent = 'Save match';
           save.addEventListener('click', async () => { const [media_type,id] = select.value.split(':'); const response = await fetch('/api/import-alias', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:item.name,year:item.year,media_type,id:Number(id)})}); const result = await response.json(); if (!response.ok) return save.textContent = result.error; entry.replaceChildren(`${item.name} matched. Re-import the same ZIP to apply it.`); });
-          entry.replaceChildren(title, select, save);
+          query.replaceWith(select); find.replaceWith(save);
         } catch (error) { find.disabled = false; find.textContent = error.message; }
       });
-      entry.append(title, query, find); list.append(entry);
+      entry.append(query, find);
+    }
+    unique.forEach(item => {
+      const entry = document.createElement('li'); const title = document.createElement('span'); title.textContent = `${item.name} (${item.year || 'year unknown'})`;
+      entry.append(title); matchEditor(item, entry); list.append(entry);
     });
-    importReport.replaceChildren(summary, list);
+    const response = await fetch('/api/import-audit'); const audit = await response.json();
+    const review = document.createElement('details'); review.className = 'import-audit';
+    const heading = document.createElement('summary');
+    const needs = (audit.summary.uncertain || 0) + (audit.summary.needs_review || 0) + (audit.summary.unmatched || 0);
+    heading.textContent = `Match audit · ${audit.summary.verified || 0} checked against Letterboxd · ${audit.summary.corrected || 0} corrected · ${needs} need review`;
+    review.append(heading);
+    const issues = document.createElement('ul'); issues.className = 'unmatched-list';
+    audit.entries.forEach(item => {
+      const entry = document.createElement('li');
+      const title = document.createElement('span'); title.textContent = `${item.name} (${item.year || 'year unknown'}) · ${item.status.replaceAll('_',' ')}`; entry.append(title);
+      if (item.source_url && /^https:\/\/(boxd\.it|letterboxd\.com)\//i.test(item.source_url)) {
+        const source = document.createElement('a'); source.href = item.source_url; source.target = '_blank'; source.rel = 'noopener noreferrer'; source.textContent = 'Letterboxd'; entry.append(source);
+      }
+      if (item.old_id && item.old_id !== item.tmdb_id) { const old = document.createElement('a'); old.href = `/movie/${item.old_id}`; old.textContent = 'Previous link'; entry.append(old); }
+      if (item.tmdb_id) { const current = document.createElement('a'); current.href = `/movie/${item.tmdb_id}`; current.textContent = 'Current link'; entry.append(current); }
+      if (item.status === 'uncertain') {
+        const confirm = document.createElement('button'); confirm.type = 'button'; confirm.className = 'quiet-action'; confirm.textContent = 'Confirm current match';
+        confirm.addEventListener('click', async () => { const response = await fetch('/api/import-confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:item.name,year:item.year})}); const result = await response.json(); if (!response.ok) return confirm.textContent = result.error; await loadReport(); }); entry.append(confirm);
+        matchEditor(item, entry);
+      }
+      issues.append(entry);
+    });
+    review.append(issues); review.open = needs > 0;
+    importReport.replaceChildren(summary, list, review);
   } catch {}
 }
 

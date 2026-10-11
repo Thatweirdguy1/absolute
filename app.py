@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 import csv
+import concurrent.futures
+from contextlib import closing
 import hashlib
 import html
 import io
@@ -11,6 +13,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.error
@@ -309,7 +312,7 @@ def spectrum_svg(colors: list[str], title: str, spectrum_id: str) -> str:
 
 def initialize_db() -> None:
     DB_PATH.parent.mkdir(exist_ok=True)
-    with sqlite3.connect(DB_PATH) as connection:
+    with closing(sqlite3.connect(DB_PATH)) as connection, connection:
         connection.execute("""
             CREATE TABLE IF NOT EXISTS spectra (
                 id TEXT PRIMARY KEY,
@@ -354,6 +357,19 @@ def initialize_db() -> None:
         connection.execute("""CREATE TABLE IF NOT EXISTS import_aliases (
             name TEXT NOT NULL, year TEXT NOT NULL, tmdb_id INTEGER NOT NULL,
             PRIMARY KEY (name, year)
+        )""")
+        connection.execute("""CREATE TABLE IF NOT EXISTS import_sources (
+            source_url TEXT PRIMARY KEY, tmdb_id INTEGER NOT NULL, verified_at INTEGER NOT NULL
+        )""")
+        connection.execute("""CREATE TABLE IF NOT EXISTS import_audit (
+            name TEXT NOT NULL, year TEXT NOT NULL, source_url TEXT NOT NULL,
+            old_id INTEGER, tmdb_id INTEGER, status TEXT NOT NULL, updated_at INTEGER NOT NULL,
+            PRIMARY KEY (name, year)
+        )""")
+        connection.execute("""CREATE TABLE IF NOT EXISTS import_corrections (
+            name TEXT NOT NULL, year TEXT NOT NULL, source_url TEXT NOT NULL,
+            old_id INTEGER NOT NULL, tmdb_id INTEGER NOT NULL, corrected_at INTEGER NOT NULL,
+            PRIMARY KEY (name, year, old_id, tmdb_id)
         )""")
 
 
@@ -418,6 +434,58 @@ def import_candidates(name: str, year: str = "") -> list[dict]:
     return candidates[:8]
 
 
+def letterboxd_identity(source_url: str) -> int:
+    parsed = urllib.parse.urlparse(source_url)
+    if parsed.scheme != "https" or parsed.hostname not in {"boxd.it", "letterboxd.com"}:
+        raise ValueError("Unsupported Letterboxd URL")
+
+    class LetterboxdRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, request, fp, code, msg, headers, newurl):
+            target = urllib.parse.urlparse(newurl)
+            if target.scheme != "https" or target.hostname not in {"boxd.it", "letterboxd.com", "www.letterboxd.com"}:
+                raise ValueError("Letterboxd redirected outside its site")
+            return super().redirect_request(request, fp, code, msg, headers, newurl)
+
+    request = urllib.request.Request(source_url, headers={"User-Agent": "Absolute/1.0 (personal archive)", "Accept": "text/html"})
+    with urllib.request.build_opener(LetterboxdRedirect()).open(request, timeout=15) as response:
+        page = response.read(2 * 1024 * 1024 + 1)
+    if len(page) > 2 * 1024 * 1024:
+        raise ValueError("Letterboxd page is too large")
+    match = re.search(rb'data-tmdb-type="(movie|tv)"[^>]*data-tmdb-id="(\d+)"', page)
+    if not match:
+        match = re.search(rb'https://(?:www\.)?themoviedb\.org/(movie|tv)/(\d+)', page)
+    if not match:
+        raise ValueError("Letterboxd page has no TMDB identity")
+    source_id = int(match.group(2))
+    if source_id <= 0:
+        raise ValueError("Invalid TMDB identity")
+    return -source_id if match.group(1) == b"tv" else source_id
+
+
+def move_activity(old_id: int, new_id: int) -> None:
+    if old_id == new_id:
+        return
+    with closing(sqlite3.connect(DB_PATH)) as connection, connection:
+        old = connection.execute("SELECT watched, watchlist, rating, review, spoiler, updated_at FROM movie_state WHERE tmdb_id=?", (old_id,)).fetchone()
+        current = connection.execute("SELECT watched, watchlist, rating, review, spoiler, updated_at FROM movie_state WHERE tmdb_id=?", (new_id,)).fetchone()
+        if old:
+            if current:
+                connection.execute("""UPDATE movie_state SET watched=?, watchlist=?, rating=?, review=?, spoiler=?, updated_at=? WHERE tmdb_id=?""",
+                    (int(bool(old[0] or current[0])), int(bool(old[1] or current[1])), current[2] if current[2] is not None else old[2],
+                     current[3] or old[3], int(bool(old[4] or current[4])), max(old[5], current[5]), new_id))
+                connection.execute("DELETE FROM movie_state WHERE tmdb_id=?", (old_id,))
+            else:
+                connection.execute("UPDATE movie_state SET tmdb_id=? WHERE tmdb_id=?", (new_id, old_id))
+        connection.execute("""DELETE FROM diary WHERE tmdb_id=? AND EXISTS (
+            SELECT 1 FROM diary target WHERE target.tmdb_id=? AND target.watched_on=diary.watched_on AND target.review=diary.review
+        )""", (old_id, new_id))
+        connection.execute("UPDATE diary SET tmdb_id=? WHERE tmdb_id=?", (new_id, old_id))
+        connection.execute("UPDATE comments SET tmdb_id=? WHERE tmdb_id=?", (new_id, old_id))
+        if not any(connection.execute(f"SELECT 1 FROM {table} WHERE tmdb_id=? LIMIT 1", (old_id,)).fetchone()
+                   for table in ("movie_state", "diary", "comments", "spectra", "import_aliases")):
+            connection.execute("DELETE FROM movies WHERE tmdb_id=?", (old_id,))
+
+
 def cached_movie(name: str, year: str) -> int | None:
     target = name.casefold().strip()
     with sqlite3.connect(DB_PATH) as connection:
@@ -436,13 +504,14 @@ def resolve_movie(name: str, year: str) -> int | None:
     if found:
         return found
     results = import_candidates(name, year)
-    if not results:
+    exact = [item for item in results if (item.get("title") or "").casefold().strip() == name.casefold().strip() and (item.get("release_date") or "")[:4] == year]
+    if len(exact) != 1:
         return None
-    exact = results[0]
-    tmdb_id = int(exact["id"])
+    match = exact[0]
+    tmdb_id = int(match["id"])
     # The search result already contains everything the library needs; the full page refreshes it later.
     with sqlite3.connect(DB_PATH) as connection:
-        connection.execute("INSERT OR REPLACE INTO movies (tmdb_id, metadata_json, refreshed_at) VALUES (?, ?, ?)", (tmdb_id, json.dumps(exact), int(time.time())))
+        connection.execute("INSERT OR REPLACE INTO movies (tmdb_id, metadata_json, refreshed_at) VALUES (?, ?, ?)", (tmdb_id, json.dumps(match), int(time.time())))
         connection.execute("INSERT OR REPLACE INTO import_aliases (name, year, tmdb_id) VALUES (?, ?, ?)", (name.casefold().strip(), year, tmdb_id))
     return tmdb_id
 
@@ -466,29 +535,96 @@ def import_letterboxd(payload: bytes) -> None:
         done = imported = skipped = 0
         unmatched = []
         unique = {}
-        for rows in files.values():
+        for filename, rows in files.items():
             for row in rows:
                 lower = {str(key).lower(): value for key, value in row.items()}
                 name, year = (lower.get("name") or "").strip(), (lower.get("year") or "").strip()
-                if name: unique[(name.casefold(), year)] = (name, year)
+                key = (name.casefold(), year)
+                url = (lower.get("letterboxd uri") or "").strip()
+                if name and (key not in unique or (url and filename in {"watched.csv", "ratings.csv", "watchlist.csv"} and unique[key][2] != url)):
+                    unique[key] = (name, year, url)
         with sqlite3.connect(DB_PATH) as connection:
             cached_rows = connection.execute("SELECT tmdb_id, metadata_json FROM movies").fetchall()
-        resolved = {}
+            aliases = {(name, year): tmdb_id for name, year, tmdb_id in connection.execute("SELECT name, year, tmdb_id FROM import_aliases")}
+            source_ids = dict(connection.execute("SELECT source_url, tmdb_id FROM import_sources"))
+        cached = {}
+        metadata_by_id = {}
         for tmdb_id, raw in cached_rows:
             item = json.loads(raw)
+            metadata_by_id[tmdb_id] = item
             title, year = item.get("title", "").casefold().strip(), (item.get("release_date") or "")[:4]
-            if title: resolved[(title, year)] = tmdb_id
-        pending = [(key, value) for key, value in unique.items() if key not in resolved]
-        def match(entry):
-            key, (name, year) = entry
+            if title: cached[(title, year)] = tmdb_id
+        previous = {key: aliases.get(key) or cached.get(key) for key in unique}
+        resolved = {}
+        verified = set()
+        pending = [(key, item[2]) for key, item in unique.items() if item[2] and item[2] not in source_ids]
+        def match_source(entry):
+            key, url = entry
             try:
-                return key, resolve_movie(name, year)
-            except (urllib.error.URLError, ConnectionError, OSError, RuntimeError): return key, None
-        for index, entry in enumerate(pending, 1):
-            key, tmdb_id = match(entry)
+                return key, letterboxd_identity(url)
+            except (ValueError, urllib.error.URLError, urllib.error.HTTPError, ConnectionError, OSError):
+                return key, None
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+            futures = [pool.submit(match_source, entry) for entry in pending]
+            for index, future in enumerate(concurrent.futures.as_completed(futures), 1):
+                key, tmdb_id = future.result()
+                if tmdb_id:
+                    url = unique[key][2]
+                    source_ids[url] = tmdb_id
+                    with sqlite3.connect(DB_PATH) as connection:
+                        connection.execute("INSERT OR REPLACE INTO import_sources (source_url, tmdb_id, verified_at) VALUES (?, ?, ?)", (url, tmdb_id, int(time.time())))
+                with import_lock:
+                    import_job.update(progress=round(index / max(1, len(pending)) * 60), message=f"Checking Letterboxd identities {index} of {len(pending)}…")
+        for index, (key, (name, year, url)) in enumerate(unique.items(), 1):
+            tmdb_id = source_ids.get(url) if url else None
+            if tmdb_id:
+                verified.add(key)
+                if tmdb_id not in metadata_by_id:
+                    media_type = "tv" if tmdb_id < 0 else "movie"
+                    try:
+                        metadata_by_id[tmdb_id] = normalize_media(tmdb_get(f"/{media_type}/{abs(tmdb_id)}"), media_type)
+                    except (urllib.error.URLError, urllib.error.HTTPError, ConnectionError, OSError, RuntimeError):
+                        metadata_by_id[tmdb_id] = {"id": tmdb_id, "title": name, "release_date": f"{year}-01-01", "_media_type": media_type}
+                with sqlite3.connect(DB_PATH) as connection:
+                    connection.execute("INSERT OR REPLACE INTO movies (tmdb_id, metadata_json, refreshed_at) VALUES (?, ?, ?)", (tmdb_id, json.dumps(metadata_by_id[tmdb_id]), int(time.time())))
+                    connection.execute("INSERT OR REPLACE INTO import_aliases (name, year, tmdb_id) VALUES (?, ?, ?)", (key[0], year, tmdb_id))
+                    connection.execute("INSERT OR REPLACE INTO import_sources (source_url, tmdb_id, verified_at) VALUES (?, ?, ?)", (url, tmdb_id, int(time.time())))
+            else:
+                tmdb_id = previous.get(key)
+                if not tmdb_id:
+                    try: tmdb_id = resolve_movie(name, year)
+                    except (urllib.error.URLError, ConnectionError, OSError, RuntimeError): tmdb_id = None
             resolved[key] = tmdb_id
             with import_lock:
-                import_job.update(progress=round(index / max(1, len(pending)) * 70), message=f"Matching {index} of {len(pending)} uncached films…")
+                import_job.update(progress=60 + round(index / max(1, len(unique)) * 10), message=f"Preparing {index} of {len(unique)} titles…")
+        active_ids = {value for value in resolved.values() if value}
+        old_owners = {}
+        for key, old_id in previous.items():
+            if old_id: old_owners.setdefault(old_id, set()).add(key)
+        corrections = []
+        uncertain = []
+        with sqlite3.connect(DB_PATH) as connection:
+            connection.execute("DELETE FROM import_audit")
+        for key, (name, year, url) in unique.items():
+            old_id, tmdb_id = previous.get(key), resolved.get(key)
+            status = "verified" if key in verified else "uncertain"
+            if old_id and tmdb_id and old_id != tmdb_id:
+                if old_id not in active_ids and len(old_owners[old_id]) == 1:
+                    move_activity(old_id, tmdb_id)
+                    status = "corrected"
+                    with sqlite3.connect(DB_PATH) as connection:
+                        connection.execute("INSERT OR IGNORE INTO import_corrections (name, year, source_url, old_id, tmdb_id, corrected_at) VALUES (?, ?, ?, ?, ?, ?)",
+                            (name, year, url, old_id, tmdb_id, int(time.time())))
+                else:
+                    status = "needs_review"
+                corrections.append({"name": name, "year": year, "old_id": old_id, "tmdb_id": tmdb_id, "status": status})
+            elif not tmdb_id:
+                status = "unmatched"
+            if status in {"uncertain", "needs_review"}:
+                uncertain.append({"name": name, "year": year, "tmdb_id": tmdb_id, "status": status})
+            with sqlite3.connect(DB_PATH) as connection:
+                connection.execute("INSERT OR REPLACE INTO import_audit (name, year, source_url, old_id, tmdb_id, status, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (name, year, url, old_id, tmdb_id, status, int(time.time())))
         for filename, rows in files.items():
             for row in rows:
                 lower = {str(key).lower(): value for key, value in row.items()}
@@ -520,11 +656,12 @@ def import_letterboxd(payload: bytes) -> None:
                 done += 1
                 with import_lock:
                     import_job.update(progress=70 + round(done / total * 30), message=f"Applying {done} of {total} records…", imported=imported, skipped=skipped)
-        report = {"source": source, "applied": applied, "unmatched": unmatched, "imported": imported, "skipped": skipped}
+        report = {"source": source, "applied": applied, "unmatched": unmatched, "imported": imported, "skipped": skipped,
+                  "verified": len(verified), "uncertain": len(uncertain), "corrected": len(corrections)}
         with sqlite3.connect(DB_PATH) as connection:
             connection.execute("INSERT INTO import_runs (created_at, source_json, applied_json, unmatched_json) VALUES (?, ?, ?, ?)", (int(time.time()), json.dumps(source), json.dumps(applied), json.dumps(unmatched)))
         with import_lock:
-            import_job.update(state="complete", progress=100, message=f"Imported {imported} records · {skipped} unmatched", error=None, report=report)
+            import_job.update(state="complete", progress=100, message=f"Imported {imported} records · {skipped} unmatched · {len(uncertain)} need review", error=None, report=report)
     except Exception as error:
         with import_lock:
             import_job.update(state="error", message="Letterboxd import failed", error=str(error))
@@ -753,6 +890,17 @@ class Handler(SimpleHTTPRequestHandler):
             with sqlite3.connect(DB_PATH) as connection:
                 row = connection.execute("SELECT created_at, source_json, applied_json, unmatched_json FROM import_runs ORDER BY id DESC LIMIT 1").fetchone()
             self.send_json({"report": {"created_at": row[0], "source": json.loads(row[1]), "applied": json.loads(row[2]), "unmatched": json.loads(row[3])} if row else None})
+            return
+        if parsed.path == "/api/import-audit":
+            with sqlite3.connect(DB_PATH) as connection:
+                summary = dict(connection.execute("SELECT status, COUNT(*) FROM import_audit GROUP BY status"))
+                rows = connection.execute("""SELECT name, year, source_url, old_id, tmdb_id, status FROM import_audit
+                    WHERE status NOT IN ('verified', 'corrected') ORDER BY CASE status WHEN 'needs_review' THEN 0 WHEN 'uncertain' THEN 1 ELSE 2 END, name""").fetchall()
+                corrections = connection.execute("SELECT name, year, source_url, old_id, tmdb_id, 'corrected' FROM import_corrections ORDER BY corrected_at DESC, name").fetchall()
+                summary["corrected"] = len(corrections)
+                rows += corrections
+            self.send_json({"summary": summary, "entries": [{"name": name, "year": year, "source_url": url,
+                "old_id": old_id, "tmdb_id": tmdb_id, "status": status} for name, year, url, old_id, tmdb_id, status in rows]})
             return
         if parsed.path == "/api/import-candidates":
             query = urllib.parse.parse_qs(parsed.query)
@@ -993,11 +1141,27 @@ class Handler(SimpleHTTPRequestHandler):
                 with sqlite3.connect(DB_PATH) as connection:
                     connection.execute("INSERT OR REPLACE INTO movies (tmdb_id, metadata_json, refreshed_at) VALUES (?, ?, ?)", (tmdb_id, json.dumps(metadata), int(time.time())))
                     connection.execute("INSERT OR REPLACE INTO import_aliases (name, year, tmdb_id) VALUES (?, ?, ?)", (name.casefold(), year, tmdb_id))
+                    connection.execute("UPDATE import_audit SET tmdb_id=?, status='manually_verified', updated_at=? WHERE name=? AND year=? AND status IN ('uncertain', 'unmatched')",
+                        (tmdb_id, int(time.time()), name, year))
                 self.send_json({"ok": True, "tmdb_id": tmdb_id})
             except (ValueError, TypeError) as error:
                 self.send_json({"error": str(error)}, 400)
             except (urllib.error.URLError, RuntimeError) as error:
                 self.send_json({"error": f"TMDB is temporarily unavailable: {error}"}, 503)
+            return
+        if self.path == "/api/import-confirm":
+            try:
+                payload = self.read_json()
+                name, year = str(payload.get("name", "")).strip(), str(payload.get("year", "")).strip()
+                with sqlite3.connect(DB_PATH) as connection:
+                    row = connection.execute("SELECT source_url, tmdb_id FROM import_audit WHERE name=? AND year=? AND status='uncertain'", (name, year)).fetchone()
+                    if not row or not row[1]: raise ValueError("No uncertain match to confirm")
+                    connection.execute("INSERT OR REPLACE INTO import_aliases (name, year, tmdb_id) VALUES (?, ?, ?)", (name.casefold(), year, row[1]))
+                    if row[0]: connection.execute("INSERT OR REPLACE INTO import_sources (source_url, tmdb_id, verified_at) VALUES (?, ?, ?)", (row[0], row[1], int(time.time())))
+                    connection.execute("UPDATE import_audit SET status='manually_verified', updated_at=? WHERE name=? AND year=?", (int(time.time()), name, year))
+                self.send_json({"ok": True})
+            except (ValueError, TypeError) as error:
+                self.send_json({"error": str(error)}, 400)
             return
         if self.path == "/api/import-letterboxd":
             length = int(self.headers.get("Content-Length", "0"))
@@ -1058,6 +1222,7 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 def self_test() -> None:
+    global DB_PATH
     assert parse_timecode("01:52:26") == 6746
     assert format_timecode(6746) == "01:52:26"
     white = frame_color(bytes([255, 255, 255] * 4))
@@ -1074,6 +1239,23 @@ def self_test() -> None:
         assert False, "invalid rating accepted"
     except ValueError:
         pass
+    original_db = DB_PATH
+    try:
+        with tempfile.TemporaryDirectory() as directory:
+            DB_PATH = Path(directory) / "test.db"
+            initialize_db()
+            with closing(sqlite3.connect(DB_PATH)) as connection, connection:
+                connection.execute("INSERT INTO movie_state (tmdb_id, watched, watchlist, rating, review, spoiler, updated_at) VALUES (1,1,0,4,'old review',0,1)")
+                connection.execute("INSERT INTO diary (tmdb_id, watched_on, review, created_at) VALUES (1,'2026-01-01','note',1)")
+                connection.execute("INSERT INTO comments (tmdb_id, body, created_at) VALUES (1,'private',1)")
+            move_activity(1, 2)
+            with closing(sqlite3.connect(DB_PATH)) as connection:
+                assert connection.execute("SELECT rating, review FROM movie_state WHERE tmdb_id=2").fetchone() == (4, "old review")
+                assert connection.execute("SELECT COUNT(*) FROM movie_state WHERE tmdb_id=1").fetchone()[0] == 0
+                assert connection.execute("SELECT tmdb_id FROM diary").fetchone()[0] == 2
+                assert connection.execute("SELECT tmdb_id FROM comments").fetchone()[0] == 2
+    finally:
+        DB_PATH = original_db
     print("Absolute Spectrum self-test passed")
 
 
