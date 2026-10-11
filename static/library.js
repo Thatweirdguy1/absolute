@@ -79,7 +79,32 @@ async function loadLibrary() {
 }
 
 async function loadReport() {
-  try { const data = await (await fetch('/api/import-report')).json(); if (!data.report) return; const rows = Object.entries(data.report.source).map(([key,total]) => `${key}: ${data.report.applied[key]||0}/${total}`).join(' · '); importReport.textContent = `Last import verified — ${rows}${data.report.unmatched.length ? ` · ${data.report.unmatched.length} unmatched` : ' · all matched'}`; } catch {}
+  try {
+    const data = await (await fetch('/api/import-report')).json(); if (!data.report) return;
+    const rows = Object.entries(data.report.source).map(([key,total]) => `${key}: ${data.report.applied[key]||0}/${total}`).join(' · ');
+    const summary = document.createElement('p'); summary.textContent = `Last import verified — ${rows}${data.report.unmatched.length ? ` · ${data.report.unmatched.length} unmatched` : ' · all matched'}`;
+    const unique = [...new Map(data.report.unmatched.map(item => [`${item.name}\0${item.year}`, item])).values()];
+    const list = document.createElement('ul'); list.className = 'unmatched-list';
+    unique.forEach(item => {
+      const entry = document.createElement('li'); const title = document.createElement('span'); title.textContent = `${item.name} (${item.year || 'year unknown'})`;
+      const query = document.createElement('input'); query.value = item.name; query.setAttribute('aria-label', `Search TMDB match for ${item.name}`);
+      const find = document.createElement('button'); find.type = 'button'; find.className = 'quiet-action'; find.textContent = 'Find match';
+      find.addEventListener('click', async () => {
+        find.disabled = true; find.textContent = 'Searching…';
+        try {
+          const response = await fetch(`/api/import-candidates?q=${encodeURIComponent(query.value)}&year=${encodeURIComponent(item.year)}`); const result = await response.json(); if (!response.ok) throw new Error(result.error);
+          if (!result.results.length) throw new Error('No TMDB matches found');
+          const select = document.createElement('select'); select.setAttribute('aria-label', `Match for ${item.name}`);
+          result.results.forEach(candidate => { const option = document.createElement('option'); option.value = `${candidate.media_type}:${Math.abs(candidate.id)}`; option.textContent = `${candidate.title} (${candidate.year || 'year unknown'}) · ${candidate.media_type === 'tv' ? 'TV' : 'Film'}`; select.append(option); });
+          const save = document.createElement('button'); save.type = 'button'; save.className = 'catalog-button'; save.textContent = 'Save match';
+          save.addEventListener('click', async () => { const [media_type,id] = select.value.split(':'); const response = await fetch('/api/import-alias', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:item.name,year:item.year,media_type,id:Number(id)})}); const result = await response.json(); if (!response.ok) return save.textContent = result.error; entry.replaceChildren(`${item.name} matched. Re-import the same ZIP to apply it.`); });
+          entry.replaceChildren(title, select, save);
+        } catch (error) { find.disabled = false; find.textContent = error.message; }
+      });
+      entry.append(title, query, find); list.append(entry);
+    });
+    importReport.replaceChildren(summary, list);
+  } catch {}
 }
 
 async function pollImport() {

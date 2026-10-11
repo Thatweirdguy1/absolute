@@ -278,6 +278,10 @@ def initialize_db() -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT, created_at INTEGER NOT NULL,
             source_json TEXT NOT NULL, applied_json TEXT NOT NULL, unmatched_json TEXT NOT NULL
         )""")
+        connection.execute("""CREATE TABLE IF NOT EXISTS import_aliases (
+            name TEXT NOT NULL, year TEXT NOT NULL, tmdb_id INTEGER NOT NULL,
+            PRIMARY KEY (name, year)
+        )""")
 
 
 def valid_rating(value):
@@ -318,9 +322,34 @@ def upsert_state(connection, tmdb_id: int, **changes) -> None:
         (tmdb_id, int(current["watched"]), int(current["watchlist"]), current["rating"], current["review"], int(current["spoiler"]), int(time.time())))
 
 
+def normalize_media(item: dict, media_type: str) -> dict:
+    result = dict(item)
+    if media_type == "tv":
+        result.update(id=-int(item["id"]), title=item.get("name") or "Untitled",
+                      original_title=item.get("original_name"), release_date=item.get("first_air_date"),
+                      runtime=(item.get("episode_run_time") or [None])[0], _media_type="tv", _tmdb_id=int(item["id"]))
+    else:
+        result.update(_media_type="movie", _tmdb_id=int(item["id"]))
+    return result
+
+
+def import_candidates(name: str, year: str = "") -> list[dict]:
+    results = tmdb_get("/search/multi", {"query": name, "include_adult": "true"}).get("results", [])
+    candidates = [normalize_media(item, item.get("media_type", "movie")) for item in results if item.get("media_type") in {"movie", "tv"}]
+    target = name.casefold().strip()
+    candidates.sort(key=lambda item: (
+        (item.get("title") or "").casefold().strip() == target,
+        not year or (item.get("release_date") or "")[:4] == year,
+        item.get("popularity", 0),
+    ), reverse=True)
+    return candidates[:8]
+
+
 def cached_movie(name: str, year: str) -> int | None:
     target = name.casefold().strip()
     with sqlite3.connect(DB_PATH) as connection:
+        alias = connection.execute("SELECT tmdb_id FROM import_aliases WHERE name=? AND year=?", (target, year)).fetchone()
+        if alias: return alias[0]
         rows = connection.execute("SELECT tmdb_id, metadata_json FROM movies").fetchall()
     for tmdb_id, raw in rows:
         item = json.loads(raw)
@@ -333,10 +362,10 @@ def resolve_movie(name: str, year: str) -> int | None:
     found = cached_movie(name, year)
     if found:
         return found
-    results = tmdb_get("/search/movie", {"query": name, "year": year}).get("results", [])
+    results = import_candidates(name, year)
     if not results:
         return None
-    exact = next((item for item in results if not year or (item.get("release_date") or "")[:4] == year), results[0])
+    exact = results[0]
     tmdb_id = int(exact["id"])
     # The search result already contains everything the library needs; the full page refreshes it later.
     with sqlite3.connect(DB_PATH) as connection:
@@ -378,13 +407,7 @@ def import_letterboxd(payload: bytes) -> None:
         def match(entry):
             key, (name, year) = entry
             try:
-                results = tmdb_get("/search/movie", {"query": name, "year": year}).get("results", [])
-                if not results: return key, None
-                exact = next((item for item in results if not year or (item.get("release_date") or "")[:4] == year), results[0])
-                tmdb_id = int(exact["id"])
-                with sqlite3.connect(DB_PATH) as connection:
-                    connection.execute("INSERT OR REPLACE INTO movies (tmdb_id, metadata_json, refreshed_at) VALUES (?, ?, ?)", (tmdb_id, json.dumps(exact), int(time.time())))
-                return key, tmdb_id
+                return key, resolve_movie(name, year)
             except (urllib.error.URLError, ConnectionError, OSError, RuntimeError): return key, None
         for index, entry in enumerate(pending, 1):
             key, tmdb_id = match(entry)
@@ -472,7 +495,8 @@ def movie_record(tmdb_id: int) -> dict:
         cached = connection.execute("SELECT metadata_json, refreshed_at FROM movies WHERE tmdb_id = ?", (tmdb_id,)).fetchone()
     metadata = json.loads(cached[0]) if cached else {}
     if not cached or time.time() - cached[1] >= 7 * 86400 or "images" not in metadata:
-        metadata = tmdb_get(f"/movie/{tmdb_id}", {"append_to_response": "credits,images"})
+        media_type, source_id = ("tv", -tmdb_id) if tmdb_id < 0 else ("movie", tmdb_id)
+        metadata = normalize_media(tmdb_get(f"/{media_type}/{source_id}", {"append_to_response": "credits,images"}), media_type)
         with sqlite3.connect(DB_PATH) as connection:
             connection.execute(
                 "INSERT OR REPLACE INTO movies (tmdb_id, metadata_json, refreshed_at) VALUES (?, ?, ?)",
@@ -642,6 +666,17 @@ class Handler(SimpleHTTPRequestHandler):
                 row = connection.execute("SELECT created_at, source_json, applied_json, unmatched_json FROM import_runs ORDER BY id DESC LIMIT 1").fetchone()
             self.send_json({"report": {"created_at": row[0], "source": json.loads(row[1]), "applied": json.loads(row[2]), "unmatched": json.loads(row[3])} if row else None})
             return
+        if parsed.path == "/api/import-candidates":
+            query = urllib.parse.parse_qs(parsed.query)
+            name, year = query.get("q", [""])[0].strip(), query.get("year", [""])[0].strip()
+            if not name:
+                self.send_json({"error": "Add a title"}, 400)
+                return
+            try:
+                self.send_json({"results": [{"id": item["id"], "title": item["title"], "year": (item.get("release_date") or "")[:4], "media_type": item["_media_type"]} for item in import_candidates(name, year)]})
+            except (urllib.error.URLError, RuntimeError) as error:
+                self.send_json({"error": f"TMDB is temporarily unavailable: {error}"}, 503)
+            return
         if parsed.path.startswith("/api/activity/"):
             try:
                 self.send_json(activity_record(int(parsed.path.rsplit("/", 1)[-1])))
@@ -773,7 +808,7 @@ class Handler(SimpleHTTPRequestHandler):
             self.path = "/home.html"
         elif parsed.path == "/create":
             self.path = "/index.html"
-        elif parsed.path.startswith("/movie/") and parsed.path.rsplit("/", 1)[-1].isdigit():
+        elif parsed.path.startswith("/movie/") and parsed.path.rsplit("/", 1)[-1].lstrip("-").isdigit():
             self.path = "/movie.html"
         elif re.fullmatch(r"/person/\d+/credits", parsed.path):
             self.path = "/person-credits.html"
@@ -839,6 +874,24 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(activity_record(tmdb_id))
             except (ValueError, TypeError) as error:
                 self.send_json({"error": str(error)}, 400)
+            return
+        if self.path == "/api/import-alias":
+            try:
+                payload = self.read_json()
+                name, year = str(payload.get("name", "")).strip(), str(payload.get("year", "")).strip()
+                media_type, source_id = str(payload.get("media_type", "")), int(payload.get("id"))
+                if not name or media_type not in {"movie", "tv"} or source_id <= 0:
+                    raise ValueError("Choose a valid TMDB match")
+                metadata = normalize_media(tmdb_get(f"/{media_type}/{source_id}"), media_type)
+                tmdb_id = metadata["id"]
+                with sqlite3.connect(DB_PATH) as connection:
+                    connection.execute("INSERT OR REPLACE INTO movies (tmdb_id, metadata_json, refreshed_at) VALUES (?, ?, ?)", (tmdb_id, json.dumps(metadata), int(time.time())))
+                    connection.execute("INSERT OR REPLACE INTO import_aliases (name, year, tmdb_id) VALUES (?, ?, ?)", (name.casefold(), year, tmdb_id))
+                self.send_json({"ok": True, "tmdb_id": tmdb_id})
+            except (ValueError, TypeError) as error:
+                self.send_json({"error": str(error)}, 400)
+            except (urllib.error.URLError, RuntimeError) as error:
+                self.send_json({"error": f"TMDB is temporarily unavailable: {error}"}, 503)
             return
         if self.path == "/api/import-letterboxd":
             length = int(self.headers.get("Content-Length", "0"))
@@ -908,6 +961,8 @@ def self_test() -> None:
     assert first == permanent_id(1, "Theatrical", 0, 10, colors)
     assert first != permanent_id(2, "Theatrical", 0, 10, colors)
     assert valid_rating("4.5") == 4.5
+    tv = normalize_media({"id": 42, "name": "Example", "first_air_date": "2024-01-02"}, "tv")
+    assert (tv["id"], tv["title"], tv["release_date"], tv["_media_type"]) == (-42, "Example", "2024-01-02", "tv")
     try:
         valid_rating("4.2")
         assert False, "invalid rating accepted"
