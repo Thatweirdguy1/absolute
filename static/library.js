@@ -9,6 +9,9 @@ const importFile = document.querySelector('#letterboxd-file');
 const importButton = document.querySelector('#letterboxd-import');
 const importStatus = document.querySelector('#import-status');
 const importReport = document.querySelector('#import-report');
+const backupFile = document.querySelector('#backup-file');
+const restoreButton = document.querySelector('#backup-restore');
+const backupStatus = document.querySelector('#backup-status');
 let library = {diary:[], watched:[], watchlist:[], rated:[], spectra:[]};
 let view = 'diary';
 let layout = 'grid';
@@ -123,6 +126,15 @@ importButton.addEventListener('click', async () => {
   importButton.disabled = true; importButton.classList.add('is-loading'); importStatus.textContent = 'Uploading your export…';
   try { const response = await fetch('/api/import-letterboxd', {method:'POST', headers:{'Content-Type':'application/zip'}, body:file}); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Import could not start'); pollImport(); }
   catch (error) { importStatus.textContent = error.message; importButton.disabled = false; importButton.classList.remove('is-loading'); }
+});
+
+restoreButton.addEventListener('click', async () => {
+  const file = backupFile.files[0]; if (!file) return backupStatus.textContent = 'Choose an Absolute backup ZIP first.';
+  if (!confirm('Restore this backup? Your current library will be saved automatically first.')) return;
+  restoreButton.disabled = true; restoreButton.classList.add('is-loading'); backupStatus.textContent = 'Restoring your archive…';
+  try { const response = await fetch('/api/restore', {method:'POST', headers:{'Content-Type':'application/zip'}, body:file}); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Restore failed'); backupStatus.textContent = data.message; await loadLibrary(); await loadReport(); }
+  catch (error) { backupStatus.textContent = error.message; }
+  finally { restoreButton.disabled = false; restoreButton.classList.remove('is-loading'); }
 });
 
 loadLibrary(); loadReport(); pollImport();

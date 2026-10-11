@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
 OUTPUT = ROOT / "output"
 DB_PATH = ROOT / "data" / "absolute.db"
+BACKUPS = ROOT / "data" / "backups"
 DEFAULT_MOVIE = ROOT / "Teenage Sex and Death at Camp Miasma 2026 1080p.mkv"
 SAMPLES = 2048
 ALGORITHM = "ASPEC-2"
@@ -35,6 +36,78 @@ job = {"state": "idle", "progress": 0, "message": "Ready", "result": None, "erro
 import_lock = threading.Lock()
 import_job = {"state": "idle", "progress": 0, "message": "Choose your Letterboxd export ZIP", "imported": 0, "skipped": 0, "error": None}
 selected_file = DEFAULT_MOVIE if DEFAULT_MOVIE.exists() else None
+
+
+def backup_database(label: str = "backup") -> Path:
+    BACKUPS.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    path = BACKUPS / f"absolute-{stamp}-{label}.db"
+    suffix = 2
+    while path.exists():
+        path = BACKUPS / f"absolute-{stamp}-{label}-{suffix}.db"; suffix += 1
+    source, target = sqlite3.connect(DB_PATH), sqlite3.connect(path)
+    try:
+        source.backup(target)
+    finally:
+        target.close()
+        source.close()
+    return path
+
+
+def backup_archive() -> bytes:
+    database = backup_database("export")
+    try:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.write(database, "absolute.db")
+            archive.writestr("manifest.json", json.dumps({"format": 1, "created_at": int(time.time())}))
+            for path in OUTPUT.glob("*"):
+                if path.is_file() and path.suffix.lower() in {".svg", ".json"}:
+                    archive.write(path, f"output/{path.name}")
+        return buffer.getvalue()
+    finally:
+        database.unlink(missing_ok=True)
+
+
+def restore_archive(payload: bytes) -> None:
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        members = archive.infolist()
+        if sum(item.file_size for item in members) > 1024 * 1024 * 1024 or len(members) > 10000:
+            raise ValueError("Backup expands beyond the safe restore limit")
+        database = next((item for item in members if item.filename == "absolute.db"), None)
+        if not database:
+            raise ValueError("Backup does not contain absolute.db")
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        temporary = DB_PATH.with_suffix(".restore.db")
+        temporary.write_bytes(archive.read(database))
+        try:
+            connection = sqlite3.connect(temporary)
+            try:
+                if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok": raise ValueError("Backup database is damaged")
+                tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                if not {"movies", "movie_state", "diary", "comments", "spectra"}.issubset(tables): raise ValueError("Backup database is not an Absolute archive")
+            finally:
+                connection.close()
+            BACKUPS.mkdir(parents=True, exist_ok=True)
+            safety = BACKUPS / f"absolute-{time.strftime('%Y%m%d-%H%M%S')}-pre-restore.zip"
+            counter = 2
+            while safety.exists(): safety = BACKUPS / f"absolute-{time.strftime('%Y%m%d-%H%M%S')}-pre-restore-{counter}.zip"; counter += 1
+            safety.write_bytes(backup_archive())
+            source, target = sqlite3.connect(temporary), sqlite3.connect(DB_PATH)
+            try:
+                source.backup(target)
+            finally:
+                target.close()
+                source.close()
+            OUTPUT.mkdir(exist_ok=True)
+            for path in OUTPUT.glob("*"):
+                if path.is_file() and path.suffix.lower() in {".svg", ".json"}: path.unlink()
+            for item in members:
+                name = Path(item.filename)
+                if len(name.parts) == 2 and name.parts[0] == "output" and name.suffix.lower() in {".svg", ".json"}:
+                    (OUTPUT / name.name).write_bytes(archive.read(item))
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 def load_env() -> dict[str, str]:
@@ -370,6 +443,7 @@ def resolve_movie(name: str, year: str) -> int | None:
     # The search result already contains everything the library needs; the full page refreshes it later.
     with sqlite3.connect(DB_PATH) as connection:
         connection.execute("INSERT OR REPLACE INTO movies (tmdb_id, metadata_json, refreshed_at) VALUES (?, ?, ?)", (tmdb_id, json.dumps(exact), int(time.time())))
+        connection.execute("INSERT OR REPLACE INTO import_aliases (name, year, tmdb_id) VALUES (?, ?, ?)", (name.casefold().strip(), year, tmdb_id))
     return tmdb_id
 
 
@@ -386,6 +460,7 @@ def import_letterboxd(payload: bytes) -> None:
                     text = archive.read(info).decode("utf-8-sig", errors="replace")
                     files[key] = list(csv.DictReader(io.StringIO(text)))
         source = {name.removesuffix(".csv"): len(rows) for name, rows in files.items()}
+        backup_database("pre-import")
         applied = {name.removesuffix(".csv"): 0 for name in files}
         total = sum(source.values()) or 1
         done = imported = skipped = 0
@@ -661,6 +736,19 @@ class Handler(SimpleHTTPRequestHandler):
             with import_lock:
                 self.send_json(dict(import_job))
             return
+        if parsed.path == "/api/backup":
+            with import_lock, job_lock:
+                if import_job["state"] in {"queued", "running"} or job["state"] in {"queued", "running"}:
+                    self.send_json({"error": "Wait for the current job to finish before backing up"}, 409)
+                    return
+                body = backup_archive()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Disposition", f'attachment; filename="absolute-backup-{time.strftime("%Y%m%d-%H%M%S")}.zip"')
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if parsed.path == "/api/import-report":
             with sqlite3.connect(DB_PATH) as connection:
                 row = connection.execute("SELECT created_at, source_json, applied_json, unmatched_json FROM import_runs ORDER BY id DESC LIMIT 1").fetchone()
@@ -824,6 +912,24 @@ class Handler(SimpleHTTPRequestHandler):
         global selected_file, job, import_job
         if not self.trusted_request():
             self.send_error(403)
+            return
+        if self.path == "/api/restore":
+            length = int(self.headers.get("Content-Length", "0"))
+            if length <= 0 or length > 500 * 1024 * 1024:
+                self.send_json({"error": "Choose an Absolute backup ZIP under 500 MB"}, 400)
+                return
+            payload = self.rfile.read(length)
+            try:
+                if not zipfile.is_zipfile(io.BytesIO(payload)): raise ValueError("That is not a valid backup ZIP")
+                with import_lock, job_lock:
+                    if import_job["state"] in {"queued", "running"} or job["state"] in {"queued", "running"}:
+                        self.send_json({"error": "Wait for the current job to finish before restoring"}, 409)
+                        return
+                    restore_archive(payload)
+                    initialize_db()
+                self.send_json({"ok": True, "message": "Backup restored"})
+            except (ValueError, zipfile.BadZipFile, sqlite3.DatabaseError, OSError) as error:
+                self.send_json({"error": str(error)}, 400)
             return
         if self.path.startswith("/api/activity/"):
             try:

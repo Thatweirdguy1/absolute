@@ -19,7 +19,7 @@
     <h1>Films remembered<br>in colour.</h1>
     <section id="import-letterboxd" class="import-panel">
       <div><p class="eyebrow">Bring your history</p><h2>Import from Letterboxd</h2><p>Upload the ZIP from Letterboxd’s data export. Watched films, diary dates, ratings, reviews and watchlist entries stay on this computer.</p></div>
-      <div class="import-controls"><input id="letterboxd-file" type="file" accept=".zip,application/zip"><button id="letterboxd-import" class="catalog-button" type="button">Import ZIP</button><p id="import-status" aria-live="polite"></p><div id="import-report" class="import-report"></div></div>
+      <div class="import-controls"><input id="letterboxd-file" type="file" accept=".zip,application/zip"><button id="letterboxd-import" class="catalog-button" type="button">Import ZIP</button><p id="import-status" aria-live="polite"></p><div id="import-report" class="import-report"></div><hr><a class="catalog-button" href="/api/backup" download>Download complete backup</a><input id="backup-file" type="file" accept=".zip,application/zip"><button id="backup-restore" class="catalog-button" type="button">Restore backup</button><p id="backup-status" aria-live="polite"></p></div>
     </section>
     <section class="library-archive">
       <div class="library-tabs" role="tablist" aria-label="Library sections">
@@ -35,7 +35,7 @@
     </section>
   </main>
   <footer class="catalog-footer">This product uses the TMDB API but is not endorsed or certified by TMDB.</footer>
-  <script src="/library.js?v=import3"></script>
+  <script src="/library.js?v=backup1"></script>
   <script src="/search.js?v=theme3"></script>
 </body>
 </html>
