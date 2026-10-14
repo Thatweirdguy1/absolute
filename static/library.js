@@ -8,6 +8,7 @@ const count = document.querySelector('#archive-count');
 const importFile = document.querySelector('#letterboxd-file');
 const importButton = document.querySelector('#letterboxd-import');
 const importStatus = document.querySelector('#import-status');
+const importPreview = document.querySelector('#import-preview');
 const importReport = document.querySelector('#import-report');
 const backupFile = document.querySelector('#backup-file');
 const restoreButton = document.querySelector('#backup-restore');
@@ -15,6 +16,11 @@ const backupStatus = document.querySelector('#backup-status');
 let library = {diary:[], watched:[], watchlist:[], rated:[], spectra:[]};
 let view = 'diary';
 let layout = 'grid';
+let previewToken = null;
+function clearImportPreview() {
+  if (previewToken) fetch('/api/import-cancel', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token:previewToken})}).catch(() => {});
+  previewToken = null; importPreview.hidden = true;
+}
 
 const empty = text => Object.assign(document.createElement('p'), {className:'library-empty', textContent:text});
 const skeletons = (count = 10) => Array.from({length:count}, () => { const item = document.createElement('div'); item.className = 'poster-skeleton'; item.setAttribute('aria-hidden','true'); item.append(Object.assign(document.createElement('span'),{className:'skeleton skeleton-poster'}), Object.assign(document.createElement('span'),{className:'skeleton skeleton-title'}), Object.assign(document.createElement('span'),{className:'skeleton skeleton-copy'})); return item; });
@@ -144,15 +150,50 @@ async function pollImport() {
   if (data.state === 'complete') { await loadLibrary(); await loadReport(); }
 }
 
+function showImportPreview(data) {
+  previewToken = data.token;
+  const heading = document.createElement('h3'); heading.textContent = 'Review this import';
+  const summary = document.createElement('p'); summary.textContent = `${Object.values(data.source).reduce((total, count) => total + count, 0)} records · ${data.conflicts.length} rating or review conflicts. No changes have been made.`;
+  const list = document.createElement('div'); list.className = 'import-conflicts';
+  data.conflicts.forEach(item => {
+    const row = document.createElement('article');
+    const title = document.createElement('h4'); title.textContent = `${item.title} · ${item.field}`;
+    const local = document.createElement('p'); local.textContent = 'In Absolute';
+    const localValue = document.createElement('pre'); localValue.textContent = String(item.local);
+    const incoming = document.createElement('p'); incoming.textContent = 'In Letterboxd';
+    const incomingValue = document.createElement('pre'); incomingValue.textContent = String(item.letterboxd);
+    const choice = document.createElement('select'); choice.dataset.conflict = item.key; choice.setAttribute('aria-label', `Choose ${item.field} for ${item.title}`);
+    [['local','Keep Absolute version'],['letterboxd','Use Letterboxd version']].forEach(([value, text]) => { const option = document.createElement('option'); option.value = value; option.textContent = text; choice.append(option); });
+    row.append(title, local, localValue, incoming, incomingValue, choice); list.append(row);
+  });
+  const controls = document.createElement('div'); controls.className = 'import-preview-actions';
+  const confirm = document.createElement('button'); confirm.type = 'button'; confirm.className = 'catalog-button'; confirm.textContent = 'Confirm import';
+  confirm.addEventListener('click', async () => {
+    confirm.disabled = true; confirm.classList.add('is-loading'); importStatus.textContent = 'Starting your import…';
+    try {
+      const choices = Object.fromEntries([...list.querySelectorAll('select')].map(select => [select.dataset.conflict, select.value]));
+      const response = await fetch('/api/import-letterboxd', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token:previewToken, choices})});
+      const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Import could not start');
+      importPreview.hidden = true; previewToken = null; pollImport();
+    } catch (error) { importStatus.textContent = error.message; confirm.disabled = false; confirm.classList.remove('is-loading'); }
+  });
+  const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'quiet-action'; cancel.textContent = 'Cancel';
+  cancel.addEventListener('click', () => { clearImportPreview(); importStatus.textContent = 'Import cancelled. No changes were made.'; });
+  controls.append(confirm, cancel); importPreview.replaceChildren(heading, summary, list, controls); importPreview.hidden = false;
+}
+
 tabs.forEach(button => button.addEventListener('click', () => { view = button.dataset.view; tabs.forEach(item => item.classList.toggle('active', item === button)); render(); }));
 layoutButtons.forEach(button => button.addEventListener('click', () => { layout = button.dataset.layout; layoutButtons.forEach(item => item.classList.toggle('active', item === button)); render(); }));
 search.addEventListener('input', render); sort.addEventListener('change', render);
 importButton.addEventListener('click', async () => {
   const file = importFile.files[0]; if (!file) return importStatus.textContent = 'Choose your Letterboxd export ZIP first.';
-  importButton.disabled = true; importButton.classList.add('is-loading'); importStatus.textContent = 'Uploading your export…';
-  try { const response = await fetch('/api/import-letterboxd', {method:'POST', headers:{'Content-Type':'application/zip'}, body:file}); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Import could not start'); pollImport(); }
+  clearImportPreview();
+  importButton.disabled = true; importButton.classList.add('is-loading'); importStatus.textContent = 'Checking your export…';
+  try { const response = await fetch('/api/import-preview', {method:'POST', headers:{'Content-Type':'application/zip'}, body:file}); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Could not preview import'); showImportPreview(data); importStatus.textContent = 'Choose how to handle any conflicts, then confirm.'; }
   catch (error) { importStatus.textContent = error.message; importButton.disabled = false; importButton.classList.remove('is-loading'); }
+  finally { importButton.disabled = false; importButton.classList.remove('is-loading'); }
 });
+importFile.addEventListener('change', clearImportPreview);
 
 restoreButton.addEventListener('click', async () => {
   const file = backupFile.files[0]; if (!file) return backupStatus.textContent = 'Choose an Absolute backup ZIP first.';

@@ -11,6 +11,7 @@ import json
 import math
 import os
 import re
+import secrets
 import sqlite3
 import subprocess
 import tempfile
@@ -38,6 +39,7 @@ job_lock = threading.Lock()
 job = {"state": "idle", "progress": 0, "message": "Ready", "result": None, "error": None}
 import_lock = threading.Lock()
 import_job = {"state": "idle", "progress": 0, "message": "Choose your Letterboxd export ZIP", "imported": 0, "skipped": 0, "error": None}
+pending_import = None
 selected_file = DEFAULT_MOVIE if DEFAULT_MOVIE.exists() else None
 
 
@@ -528,18 +530,87 @@ def resolve_movie(name: str, year: str) -> int | None:
     return tmdb_id
 
 
-def import_letterboxd(payload: bytes) -> None:
+def read_letterboxd_files(payload: bytes) -> dict:
+    files = {}
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        for info in archive.infolist():
+            # Deleted and orphaned entries are not part of the current export.
+            key = info.filename.lower()
+            if key in {"watched.csv", "watchlist.csv", "ratings.csv", "reviews.csv", "diary.csv"}:
+                if info.file_size > 20 * 1024 * 1024:
+                    raise ValueError("A Letterboxd CSV is too large")
+                files[key] = list(csv.DictReader(io.StringIO(archive.read(info).decode("utf-8-sig", errors="replace"))))
+    if not files:
+        raise ValueError("No Letterboxd CSV files found in the ZIP")
+    return files
+
+
+def import_titles(files: dict) -> dict:
+    unique = {}
+    for filename, rows in files.items():
+        for row in rows:
+            lower = {str(key).lower(): value for key, value in row.items()}
+            name, year = (lower.get("name") or "").strip(), (lower.get("year") or "").strip()
+            key = (name.casefold(), year)
+            url = (lower.get("letterboxd uri") or "").strip()
+            if name and (key not in unique or (url and filename in {"watched.csv", "ratings.csv", "watchlist.csv"} and unique[key][2] != url)):
+                unique[key] = (name, year, url)
+    return unique
+
+
+def preview_letterboxd(files: dict) -> tuple[list[dict], dict]:
+    unique = import_titles(files)
+    with closing(sqlite3.connect(DB_PATH)) as connection:
+        aliases = {(name, year): tmdb_id for name, year, tmdb_id in connection.execute("SELECT name, year, tmdb_id FROM import_aliases")}
+        source_ids = dict(connection.execute("SELECT source_url, tmdb_id FROM import_sources"))
+        incoming = {}
+        names = {}
+        for rows in files.values():
+            for row in rows:
+                lower = {str(key).lower(): value for key, value in row.items()}
+                name, year = (lower.get("name") or "").strip(), (lower.get("year") or "").strip()
+                film = unique.get((name.casefold(), year))
+                tmdb_id = source_ids.get(film[2]) if film else None
+                tmdb_id = tmdb_id or aliases.get((name.casefold(), year))
+                if not tmdb_id:
+                    continue
+                names[tmdb_id] = name
+                values = incoming.setdefault(tmdb_id, {})
+                rating = valid_rating(lower.get("rating"))
+                review = (lower.get("review") or "").strip()
+                if rating is not None:
+                    values["rating"] = rating
+                if review:
+                    values["review"] = review
+        snapshot = {}
+        conflicts = []
+        for tmdb_id, values in incoming.items():
+            current = connection.execute("SELECT rating, review FROM movie_state WHERE tmdb_id=?", (tmdb_id,)).fetchone()
+            snapshot[tmdb_id] = current
+            if not current:
+                continue
+            for field, old in (("rating", current[0]), ("review", current[1])):
+                new = values.get(field)
+                same = old == new or (field == "review" and old and new and old.replace("\r\n", "\n") == new.replace("\r\n", "\n"))
+                if old not in (None, "") and new not in (None, "") and not same:
+                    conflicts.append({"key": f"{tmdb_id}:{field}", "title": names[tmdb_id], "field": field,
+                                      "local": old, "letterboxd": new})
+    return conflicts, snapshot
+
+
+def import_state_changes(tmdb_id: int, rating: float | None, review: str, keep_local: set[str]) -> dict:
+    changes = {"watched": True, "watchlist": False}
+    if rating is not None and f"{tmdb_id}:rating" not in keep_local:
+        changes["rating"] = rating
+    if review and f"{tmdb_id}:review" not in keep_local:
+        changes["review"] = review
+    return changes
+
+
+def import_letterboxd(payload: bytes, keep_local: set[str]) -> None:
     global import_job
     try:
-        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-            files = {}
-            for info in archive.infolist():
-                # Letterboxd also includes deleted/ and orphaned/ CSVs with the
-                # same basenames. Only the active, root-level export is current.
-                key = info.filename.lower()
-                if key in {"watched.csv", "watchlist.csv", "ratings.csv", "reviews.csv", "diary.csv"}:
-                    text = archive.read(info).decode("utf-8-sig", errors="replace")
-                    files[key] = list(csv.DictReader(io.StringIO(text)))
+        files = read_letterboxd_files(payload)
         source = {name.removesuffix(".csv"): len(rows) for name, rows in files.items()}
         backup_database("pre-import")
         review_by_viewing = {}
@@ -557,15 +628,7 @@ def import_letterboxd(payload: bytes) -> None:
         total = sum(source.values()) or 1
         done = imported = skipped = 0
         unmatched = []
-        unique = {}
-        for filename, rows in files.items():
-            for row in rows:
-                lower = {str(key).lower(): value for key, value in row.items()}
-                name, year = (lower.get("name") or "").strip(), (lower.get("year") or "").strip()
-                key = (name.casefold(), year)
-                url = (lower.get("letterboxd uri") or "").strip()
-                if name and (key not in unique or (url and filename in {"watched.csv", "ratings.csv", "watchlist.csv"} and unique[key][2] != url)):
-                    unique[key] = (name, year, url)
+        unique = import_titles(files)
         with sqlite3.connect(DB_PATH) as connection:
             cached_rows = connection.execute("SELECT tmdb_id, metadata_json FROM movies").fetchall()
             aliases = {(name, year): tmdb_id for name, year, tmdb_id in connection.execute("SELECT name, year, tmdb_id FROM import_aliases")}
@@ -634,6 +697,9 @@ def import_letterboxd(payload: bytes) -> None:
             if old_id and tmdb_id and old_id != tmdb_id:
                 if old_id not in active_ids and len(old_owners[old_id]) == 1:
                     move_activity(old_id, tmdb_id)
+                    for field in ("rating", "review"):
+                        if f"{old_id}:{field}" in keep_local:
+                            keep_local.add(f"{tmdb_id}:{field}")
                     status = "corrected"
                     with sqlite3.connect(DB_PATH) as connection:
                         connection.execute("INSERT OR IGNORE INTO import_corrections (name, year, source_url, old_id, tmdb_id, corrected_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -663,10 +729,7 @@ def import_letterboxd(payload: bytes) -> None:
                         if filename == "watchlist.csv":
                             upsert_state(connection, tmdb_id, watchlist=True)
                         else:
-                            changes = {"watched": True, "watchlist": False}
-                            if rating is not None: changes["rating"] = rating
-                            if review: changes["review"] = review
-                            upsert_state(connection, tmdb_id, **changes)
+                            upsert_state(connection, tmdb_id, **import_state_changes(tmdb_id, rating, review, keep_local))
                         if filename == "diary.csv":
                             watched_on = lower.get("watched date") or lower.get("date") or ""
                             if re.fullmatch(r"\d{4}-\d{2}-\d{2}", watched_on):
@@ -1079,7 +1142,7 @@ class Handler(SimpleHTTPRequestHandler):
         super().do_GET()
 
     def do_POST(self) -> None:
-        global selected_file, job, import_job
+        global selected_file, job, import_job, pending_import
         if not self.trusted_request():
             self.send_error(403)
             return
@@ -1097,6 +1160,7 @@ class Handler(SimpleHTTPRequestHandler):
                         return
                     restore_archive(payload)
                     initialize_db()
+                    pending_import = None
                 self.send_json({"ok": True, "message": "Backup restored"})
             except (ValueError, zipfile.BadZipFile, sqlite3.DatabaseError, OSError) as error:
                 self.send_json({"error": str(error)}, 400)
@@ -1185,21 +1249,67 @@ class Handler(SimpleHTTPRequestHandler):
             except (ValueError, TypeError) as error:
                 self.send_json({"error": str(error)}, 400)
             return
-        if self.path == "/api/import-letterboxd":
+        if self.path == "/api/import-cancel":
+            try:
+                token = self.read_json().get("token")
+            except (ValueError, json.JSONDecodeError):
+                token = None
+            with import_lock:
+                if pending_import and token == pending_import["token"]:
+                    pending_import = None
+            self.send_json({"ok": True})
+            return
+        if self.path == "/api/import-preview":
             length = int(self.headers.get("Content-Length", "0"))
             if length <= 0 or length > 100 * 1024 * 1024:
                 self.send_json({"error": "Choose a Letterboxd ZIP under 100 MB"}, 400)
                 return
             payload = self.rfile.read(length)
-            if not zipfile.is_zipfile(io.BytesIO(payload)):
-                self.send_json({"error": "That is not a valid ZIP export"}, 400)
+            try:
+                files = read_letterboxd_files(payload)
+                conflicts, snapshot = preview_letterboxd(files)
+            except (ValueError, zipfile.BadZipFile, OSError) as error:
+                self.send_json({"error": f"Could not preview this export: {error}"}, 400)
                 return
             with import_lock:
                 if import_job["state"] in {"queued", "running"}:
                     self.send_json({"error": "An import is already running"}, 409)
                     return
+                token = secrets.token_urlsafe(24)
+                pending_import = {"token": token, "payload": payload, "conflicts": conflicts, "snapshot": snapshot, "created_at": time.time()}
+            self.send_json({"token": token, "source": {name.removesuffix(".csv"): len(rows) for name, rows in files.items()}, "conflicts": conflicts})
+            return
+        if self.path == "/api/import-letterboxd":
+            try:
+                request = self.read_json()
+                if not isinstance(request, dict):
+                    raise ValueError("Invalid import request")
+                choices = request.get("choices", {})
+                if not isinstance(choices, dict):
+                    raise ValueError("Invalid import choices")
+            except (ValueError, TypeError, json.JSONDecodeError) as error:
+                self.send_json({"error": str(error)}, 400)
+                return
+            with import_lock:
+                preview = pending_import
+                if not preview or request.get("token") != preview["token"] or time.time() - preview["created_at"] > 3600:
+                    self.send_json({"error": "Preview this ZIP again before importing"}, 400)
+                    return
+                allowed = {item["key"] for item in preview["conflicts"]}
+                if any(key not in allowed or not isinstance(value, str) or value not in {"local", "letterboxd"} for key, value in choices.items()):
+                    self.send_json({"error": "Invalid import choices"}, 400)
+                    return
+                with closing(sqlite3.connect(DB_PATH)) as connection:
+                    for tmdb_id, previous in preview["snapshot"].items():
+                        current = connection.execute("SELECT rating, review FROM movie_state WHERE tmdb_id=?", (tmdb_id,)).fetchone()
+                        if current != previous:
+                            self.send_json({"error": "Your library changed since the preview. Preview the ZIP again."}, 409)
+                            return
                 import_job = {"state": "running", "progress": 1, "message": "Opening your Letterboxd export…", "imported": 0, "skipped": 0, "error": None}
-            threading.Thread(target=import_letterboxd, args=(payload,), daemon=True).start()
+                keep_local = {key for key in allowed if choices.get(key) != "letterboxd"}
+                payload = preview["payload"]
+                pending_import = None
+            threading.Thread(target=import_letterboxd, args=(payload, keep_local), daemon=True).start()
             self.send_json({"ok": True}, 202)
             return
         if self.path == "/api/select-file":
@@ -1275,6 +1385,13 @@ def self_test() -> None:
                 connection.execute("UPDATE diary SET review='local edit' WHERE tmdb_id=3")
                 import_diary_viewing(connection, 3, '2026-01-02', False, 4, 'exported review')
                 assert connection.execute("SELECT COUNT(*), review FROM diary WHERE tmdb_id=3").fetchone() == (1, 'local edit')
+                connection.execute("INSERT INTO import_sources (source_url, tmdb_id, verified_at) VALUES ('https://letterboxd.com/film/test/',3,1)")
+                connection.execute("INSERT INTO movie_state (tmdb_id, watched, watchlist, rating, review, spoiler, updated_at) VALUES (3,1,0,4,'local review',0,1)")
+            sample = {"reviews.csv": [{"Name": "Test", "Year": "2026", "Letterboxd URI": "https://letterboxd.com/film/test/", "Rating": "5", "Review": "new review"}]}
+            conflicts, snapshot = preview_letterboxd(sample)
+            assert {item["key"] for item in conflicts} == {"3:rating", "3:review"} and snapshot[3] == (4, "local review")
+            assert import_state_changes(3, 5, "new review", {"3:rating", "3:review"}) == {"watched": True, "watchlist": False}
+            assert import_state_changes(3, 5, "new review", set())["review"] == "new review"
             move_activity(1, 2)
             with closing(sqlite3.connect(DB_PATH)) as connection:
                 assert connection.execute("SELECT rating, review FROM movie_state WHERE tmdb_id=2").fetchone() == (4, "old review")
