@@ -411,6 +411,18 @@ def upsert_state(connection, tmdb_id: int, **changes) -> None:
         (tmdb_id, int(current["watched"]), int(current["watchlist"]), current["rating"], current["review"], int(current["spoiler"]), int(time.time())))
 
 
+def import_diary_viewing(connection, tmdb_id: int, watched_on: str, rewatch: bool, rating: float | None, review: str) -> None:
+    matches = connection.execute("SELECT id, review FROM diary WHERE tmdb_id=? AND watched_on=? AND rewatch=? AND rating IS ?",
+        (tmdb_id, watched_on, int(rewatch), rating)).fetchall()
+    if len(matches) == 1:
+        if review and not matches[0][1]:
+            connection.execute("UPDATE diary SET review=? WHERE id=? AND review=''", (review, matches[0][0]))
+    elif not matches and not connection.execute("SELECT 1 FROM diary WHERE tmdb_id=? AND watched_on=?", (tmdb_id, watched_on)).fetchone():
+        # ponytail: same-day distinct viewings need an export entry ID before automatic reconciliation.
+        connection.execute("INSERT INTO diary (tmdb_id, watched_on, rewatch, rating, review, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (tmdb_id, watched_on, int(rewatch), rating, review, int(time.time())))
+
+
 def normalize_media(item: dict, media_type: str) -> dict:
     result = dict(item)
     if media_type == "tv":
@@ -530,6 +542,17 @@ def import_letterboxd(payload: bytes) -> None:
                     files[key] = list(csv.DictReader(io.StringIO(text)))
         source = {name.removesuffix(".csv"): len(rows) for name, rows in files.items()}
         backup_database("pre-import")
+        review_by_viewing = {}
+        for row in files.get("reviews.csv", []):
+            lower = {str(key).lower(): value for key, value in row.items()}
+            key = ((lower.get("name") or "").casefold().strip(), (lower.get("year") or "").strip(),
+                   lower.get("watched date") or lower.get("date") or "",
+                   (lower.get("rewatch") or "").lower() in {"yes", "true", "1"}, valid_rating(lower.get("rating")))
+            review = (lower.get("review") or "").strip()
+            if key in review_by_viewing and review_by_viewing[key] != review:
+                review_by_viewing[key] = None
+            else:
+                review_by_viewing[key] = review
         applied = {name.removesuffix(".csv"): 0 for name in files}
         total = sum(source.values()) or 1
         done = imported = skipped = 0
@@ -648,9 +671,8 @@ def import_letterboxd(payload: bytes) -> None:
                             watched_on = lower.get("watched date") or lower.get("date") or ""
                             if re.fullmatch(r"\d{4}-\d{2}-\d{2}", watched_on):
                                 rewatch = (lower.get("rewatch") or "").lower() in {"yes", "true", "1"}
-                                exists = connection.execute("SELECT 1 FROM diary WHERE tmdb_id=? AND watched_on=? AND review=?", (tmdb_id, watched_on, review)).fetchone()
-                                if not exists:
-                                    connection.execute("INSERT INTO diary (tmdb_id, watched_on, rewatch, rating, review, created_at) VALUES (?, ?, ?, ?, ?, ?)", (tmdb_id, watched_on, int(rewatch), rating, review, int(time.time())))
+                                viewing = (name.casefold(), year, watched_on, rewatch, rating)
+                                import_diary_viewing(connection, tmdb_id, watched_on, rewatch, rating, review_by_viewing.get(viewing) or review)
                     imported += 1
                     applied[filename.removesuffix(".csv")] += 1
                 done += 1
@@ -1248,6 +1270,11 @@ def self_test() -> None:
                 connection.execute("INSERT INTO movie_state (tmdb_id, watched, watchlist, rating, review, spoiler, updated_at) VALUES (1,1,0,4,'old review',0,1)")
                 connection.execute("INSERT INTO diary (tmdb_id, watched_on, review, created_at) VALUES (1,'2026-01-01','note',1)")
                 connection.execute("INSERT INTO comments (tmdb_id, body, created_at) VALUES (1,'private',1)")
+                import_diary_viewing(connection, 3, '2026-01-02', False, 4, 'exported review')
+                import_diary_viewing(connection, 3, '2026-01-02', False, 4, 'exported review')
+                connection.execute("UPDATE diary SET review='local edit' WHERE tmdb_id=3")
+                import_diary_viewing(connection, 3, '2026-01-02', False, 4, 'exported review')
+                assert connection.execute("SELECT COUNT(*), review FROM diary WHERE tmdb_id=3").fetchone() == (1, 'local edit')
             move_activity(1, 2)
             with closing(sqlite3.connect(DB_PATH)) as connection:
                 assert connection.execute("SELECT rating, review FROM movie_state WHERE tmdb_id=2").fetchone() == (4, "old review")
