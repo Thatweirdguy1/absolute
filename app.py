@@ -24,6 +24,7 @@ import webbrowser
 import zipfile
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
+from auth import RegistrationError, initialize_auth, register, verify_email
 
 
 ROOT = Path(__file__).resolve().parent
@@ -373,6 +374,7 @@ def initialize_db() -> None:
             old_id INTEGER NOT NULL, tmdb_id INTEGER NOT NULL, corrected_at INTEGER NOT NULL,
             PRIMARY KEY (name, year, old_id, tmdb_id)
         )""")
+        initialize_auth(connection)
 
 
 def valid_rating(value):
@@ -1127,6 +1129,10 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/":
             self.path = "/home.html"
+        elif parsed.path == "/register":
+            self.path = "/register.html"
+        elif parsed.path == "/verify-email":
+            self.path = "/verify-email.html"
         elif parsed.path == "/create":
             self.path = "/index.html"
         elif parsed.path.startswith("/movie/") and parsed.path.rsplit("/", 1)[-1].lstrip("-").isdigit():
@@ -1145,6 +1151,23 @@ class Handler(SimpleHTTPRequestHandler):
         global selected_file, job, import_job, pending_import
         if not self.trusted_request():
             self.send_error(403)
+            return
+        if self.path in {"/api/register", "/api/verify-email"}:
+            try:
+                if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
+                    raise RegistrationError("Send a JSON request")
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= 8192:
+                    raise RegistrationError("Invalid request size")
+                payload = self.read_json()
+                if not isinstance(payload, dict):
+                    raise RegistrationError("Invalid request")
+                if self.path == "/api/register":
+                    self.send_json(register(DB_PATH, payload, self.client_address[0], load_env()), 201)
+                else:
+                    self.send_json(verify_email(DB_PATH, payload.get("token")))
+            except (RegistrationError, ValueError, TypeError, json.JSONDecodeError) as error:
+                self.send_json({"error": str(error)}, 400)
             return
         if self.path == "/api/restore":
             length = int(self.headers.get("Content-Length", "0"))

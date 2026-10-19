@@ -28,7 +28,7 @@ The application contacts TMDB for film metadata and artwork. A Letterboxd import
 - [FFmpeg](https://ffmpeg.org/) and `ffprobe` available on `PATH`
 - A [TMDB API Read Access Token](https://www.themoviedb.org/settings/api)
 
-No Python packages are required; the application uses the standard library.
+Install the Python dependency with `python -m pip install -r requirements.txt` before starting the application. Email registration uses Argon2 password hashing.
 
 ## Setup
 
@@ -60,6 +60,12 @@ No Python packages are required; the application uses the standard library.
    Or run `python app.py` on any supported platform.
 
 5. Open [http://127.0.0.1:8765](http://127.0.0.1:8765).
+
+## Email registration (development)
+
+The registration page is at `/register`. New accounts remain unverified until the user opens an emailed, one-hour, single-use verification link. Configure `ABSOLUTE_BASE_URL`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, and `SMTP_FROM` in your ignored `.env`. The SMTP server must support implicit TLS. If mail is not configured, registration fails closed. Never commit SMTP credentials or use an HTTP base URL outside localhost.
+
+Registration is an initial account-creation slice, **not a complete multi-user deployment**: sign-in, sessions, MFA, account-scoped library data, and authorization of existing endpoints are not implemented. Do not expose this development server to the internet.
 
 ## Importing from Letterboxd
 
